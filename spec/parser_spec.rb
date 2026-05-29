@@ -302,6 +302,14 @@ second"')).to eq('firstsecond')
       it 'preserves URL with full URL + trailing comment' do
         expect(FlexJSON.parse('url: http://example.com/ # see this site')).to eq({ 'url' => 'http://example.com/' })
       end
+
+      it 'keeps /* as part of the token when not preceded by whitespace' do
+        expect(FlexJSON.parse('path: a/*b/c')).to eq({ 'path' => 'a/*b/c' })
+      end
+
+      it 'treats /* after whitespace as a block comment' do
+        expect(FlexJSON.parse('name: Tilo /* a comment */')).to eq({ 'name' => 'Tilo' })
+      end
     end
 
     describe 'triple-quoted multi-line strings' do
@@ -372,6 +380,27 @@ second"')).to eq('firstsecond')
 
       it 'treats backslashes inside quoteless strings as literal (no escape processing)' do
         expect(FlexJSON.parse('text: a \ is just a \\').values.first).to eq('a \\ is just a \\')
+      end
+
+      it 'treats \\n inside a quoteless string as two literal characters' do
+        # Ruby single-quoted source: the input is the 4 chars  a \ n b
+        expect(FlexJSON.parse('x: a\nb')).to eq({ 'x' => 'a\nb' })
+      end
+
+      it 'terminates a quoteless value at }' do
+        expect(FlexJSON.parse('{a: hello world}')).to eq({ 'a' => 'hello world' })
+      end
+
+      it 'terminates a quoteless value at ]' do
+        expect(FlexJSON.parse('[hello world]')).to eq(['hello world'])
+      end
+
+      it 'treats a malformed number as a quoteless string (1.2.3)' do
+        expect(FlexJSON.parse('{version: 1.2.3}')).to eq({ 'version' => '1.2.3' })
+      end
+
+      it 'treats a digit-led non-number token as a quoteless string (12abc)' do
+        expect(FlexJSON.parse('{v: 12abc}')).to eq({ 'v' => '12abc' })
       end
     end
 
@@ -607,6 +636,26 @@ second"')).to eq('firstsecond')
       expect { FlexJSON.parse('[1, 2, 3') }.to raise_error(FlexJSON::ParseError)
     end
 
+    it 'raises on a mismatched closing bracket in an array ([1, 2})' do
+      expect { FlexJSON.parse('[1, 2}') }.to raise_error(FlexJSON::ParseError)
+    end
+
+    it 'raises on a mismatched closing bracket in an object ({"a": 1])' do
+      expect { FlexJSON.parse('{"a": 1]') }.to raise_error(FlexJSON::ParseError)
+    end
+
+    it 'raises on empty input' do
+      expect { FlexJSON.parse('') }.to raise_error(FlexJSON::ParseError)
+    end
+
+    it 'raises on whitespace-only input' do
+      expect { FlexJSON.parse('    ') }.to raise_error(FlexJSON::ParseError)
+    end
+
+    it 'raises on comment-only input (no value)' do
+      expect { FlexJSON.parse("// just a comment\n") }.to raise_error(FlexJSON::ParseError)
+    end
+
     it 'raises FlexJSON::ParseError on bad escape sequence' do
       expect { FlexJSON.parse('"\q"') }.to raise_error(FlexJSON::ParseError, /escape/)
     end
@@ -786,6 +835,125 @@ second"')).to eq('firstsecond')
       expect(result[0]).to eq('JSON Test Pattern pass1')
       # 23456789012E666 overflows to Infinity (per §7.2 tentative)
       expect(result[8]['']).to eq(Float::INFINITY)
+    end
+  end
+
+  # ============================================================
+  # Control characters and escapes across quote styles
+  # ============================================================
+
+  describe 'control characters and escapes' do
+    it 'keeps a raw tab byte literally inside a double-quoted string' do
+      expect(FlexJSON.parse(%("a\tb"))).to eq("a\tb")
+    end
+
+    it 'keeps a raw newline byte literally inside a double-quoted string' do
+      expect(FlexJSON.parse(%("a\nb"))).to eq("a\nb")
+    end
+
+    it 'processes \\n escape inside a single-quoted string (same as double-quoted)' do
+      # Ruby source "'a\\nb'" is the 5 chars  ' a \ n b ' → parser turns \n into a newline
+      expect(FlexJSON.parse("'a\\nb'")).to eq("a\nb")
+    end
+
+    it 'processes \\t escape inside a single-quoted string' do
+      expect(FlexJSON.parse("'a\\tb'")).to eq("a\tb")
+    end
+  end
+
+  # ============================================================
+  # Options (§5 API)
+  # ============================================================
+
+  describe 'options' do
+    describe 'symbolize_keys' do
+      it 'returns symbol keys when symbolize_keys: true' do
+        expect(FlexJSON.parse('{"a": 1, "b": 2}', symbolize_keys: true)).to eq({ a: 1, b: 2 })
+      end
+
+      it 'symbolizes nested object keys' do
+        expect(FlexJSON.parse('{"outer": {"inner": 1}}', symbolize_keys: true)).to eq({ outer: { inner: 1 } })
+      end
+
+      it 'defaults to string keys' do
+        expect(FlexJSON.parse('{"a": 1}')).to eq({ 'a' => 1 })
+      end
+    end
+
+    describe 'max_depth' do
+      it 'raises when nesting exceeds the default (512)' do
+        deep = ('[' * 1000) + (']' * 1000)
+        expect { FlexJSON.parse(deep) }.to raise_error(FlexJSON::ParseError, /depth|nest/i)
+      end
+
+      it 'accepts nesting within an explicit max_depth' do
+        expect(FlexJSON.parse('[[[1]]]', max_depth: 5)).to eq([[[1]]])
+      end
+
+      it 'raises when nesting exceeds an explicit max_depth' do
+        expect { FlexJSON.parse('[[[1]]]', max_depth: 2) }.to raise_error(FlexJSON::ParseError, /depth|nest/i)
+      end
+    end
+
+    describe 'duplicate_key' do
+      it 'last value wins by default' do
+        expect(FlexJSON.parse('{"a": 1, "a": 2}')['a']).to eq(2)
+      end
+
+      it 'first value wins with duplicate_key: :first_wins' do
+        expect(FlexJSON.parse('{"a": 1, "a": 2}', duplicate_key: :first_wins)['a']).to eq(1)
+      end
+
+      it 'raises with duplicate_key: :raise' do
+        expect { FlexJSON.parse('{"a": 1, "a": 2}', duplicate_key: :raise) }.to raise_error(FlexJSON::ParseError, /duplicate/i)
+      end
+    end
+  end
+
+  # ============================================================
+  # Whitespace semantics (Rails String#blank? / [[:space:]])
+  # ============================================================
+
+  describe 'whitespace semantics ([[:space:]], same as Rails blank?)' do
+    it 'treats vertical tab (0x0B) as whitespace between tokens' do
+      expect(FlexJSON.parse("[1,\x0B2,\x0B3]")).to eq([1, 2, 3])
+    end
+
+    it 'treats form feed (0x0C) as whitespace between tokens' do
+      expect(FlexJSON.parse("[1,\x0C2,\x0C3]")).to eq([1, 2, 3])
+    end
+
+    it 'treats NBSP (U+00A0) as whitespace between tokens' do
+      expect(FlexJSON.parse("[\u00A01\u00A0,\u00A02]")).to eq([1, 2])
+    end
+
+    it 'trims NBSP (U+00A0) around a quoteless value' do
+      expect(FlexJSON.parse("x:\u00A0value\u00A0")).to eq({ "x" => "value" })
+    end
+  end
+
+  # ============================================================
+  # Encoding errors (§3.1)
+  # ============================================================
+
+  describe 'encoding errors' do
+    it 'raises FlexJSON::EncodingError on bytes invalid for the claimed encoding' do
+      input = "\"bad\xFF byte\"".b.force_encoding('UTF-8')  # 0xFF is not valid UTF-8
+      expect { FlexJSON.parse(input) }.to raise_error(FlexJSON::EncodingError)
+    end
+
+    it 'FlexJSON::EncodingError is a kind of ParseError' do
+      expect(FlexJSON::EncodingError.ancestors).to include(FlexJSON::ParseError)
+    end
+  end
+
+  # ============================================================
+  # Out of scope — values returned as-is
+  # ============================================================
+
+  describe 'out-of-scope values stay strings' do
+    it 'leaves a date string as a String (§3 row 22)' do
+      expect(FlexJSON.parse('"2025-01-31"')).to eq('2025-01-31')
     end
   end
 end
