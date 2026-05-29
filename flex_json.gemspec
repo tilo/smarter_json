@@ -15,7 +15,7 @@ Gem::Specification.new do |spec|
     FlexJSON is a permissive JSON/JSON5 parser: comments, trailing commas, different quote styles, Python/JS keywords, and more, all parse to the same Ruby objects. Purposely no strict mode, always best-effort, blazing fast. Handles BOM, smart quotes, messy input. Compatible with config/data files and API responses alike.
   DESC
 
-  spec.homepage      = "https://github.com/tilo/flex_json"
+  spec.homepage = "https://github.com/tilo/flex_json"
 
   spec.metadata["homepage_uri"]      = spec.homepage
   spec.metadata["source_code_uri"]   = spec.homepage
@@ -23,7 +23,7 @@ Gem::Specification.new do |spec|
   spec.metadata["documentation_uri"] = "https://github.com/tilo/flex_json#readme"
   spec.metadata["bug_tracker_uri"]   = "https://github.com/tilo/flex_json/issues"
   # spec.metadata["allowed_push_host"] = "TODO: Set to your gem server 'https://example.com'"
-  spec.required_ruby_version = ">= 3.2.0"
+  spec.required_ruby_version = ">= 2.5.0"
 
   # Uncomment the line below to require MFA for gem pushes.
   # This helps protect your gem from supply chain attacks by ensuring

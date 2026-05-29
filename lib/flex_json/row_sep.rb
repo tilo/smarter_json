@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+
 # Utility: Auto-detect line ending/row separator (CR, LF, CRLF) for arbitrary input.
 # Adapted from smarter_csv, but only line ending part used here (not column).
 
@@ -8,7 +9,7 @@ module FlexJSON
     # Will return one of "\r\n", "\n", or "\r", or nil if not found.
     # Limitation: if IO, it rewinds at the end if possible.
     def self.detect_row_sep(input, sample_size = 500)
-      counts = {"\n" => 0, "\r" => 0, "\r\n" => 0}
+      counts = { "\n" => 0, "\r" => 0, "\r\n" => 0 }
       quoted = false
       last_char = nil
       lines_seen = 0
@@ -39,7 +40,7 @@ module FlexJSON
       # Handle case where file ends with '\r'
       counts["\r"] += 1 if last_char == "\r"
       # Find most frequent
-      key, _ = counts.max_by{|_k,v| v}
+      key, _ = counts.max_by { |_k, v| v }
       key if counts[key] > 0
     end
   end

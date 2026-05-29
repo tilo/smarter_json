@@ -19,6 +19,7 @@ module FlexJSON
 
     def peek(n = @buffer_size)
       return @peek_buf.dup.force_encoding(@emit_encoding || Encoding::ASCII_8BIT) if @peek_buf
+
       chunk = @io.read(n)
       if chunk && !chunk.empty?
         raw = strip_bom(chunk.b)
@@ -33,11 +34,14 @@ module FlexJSON
     def gets(sep = @options[:row_sep])
       raise ArgumentError, "PeekableIO#gets does not support gets(nil) — pass an explicit separator string" if sep.nil?
       return @io.gets(sep) if @peek_buf.nil?
+
       if @buffer_frozen && buffer_exhausted?
         line = @io.gets(sep)
         return nil if line.nil?
+
         int = internal_encoding
         return line if int && line.encoding == int
+
         out_enc = @emit_encoding || external_encoding
         line = line.force_encoding(out_enc) if out_enc && line.encoding != out_enc
         return maybe_transcode(line)
@@ -57,6 +61,7 @@ module FlexJSON
         end
         rest = @peek_buf.byteslice(@peek_pos..-1)
         return nil if rest.empty?
+
         @peek_pos = @peek_buf.bytesize
         return maybe_transcode(rest.force_encoding(out_enc || Encoding::ASCII_8BIT))
       end
@@ -70,7 +75,7 @@ module FlexJSON
       else
         @peek_pos = @peek_buf.bytesize
         remainder = @io.gets(sep)
-        combined = rest.b + (remainder ? remainder.b : ''.b)
+        combined = rest.b + (remainder ? remainder.b : "".b)
         maybe_transcode(out_enc ? combined.force_encoding(out_enc) : combined)
       end
     end
@@ -78,18 +83,20 @@ module FlexJSON
     def readline(sep = @options[:row_sep])
       line = gets(sep)
       raise EOFError, "end of file reached" if line.nil?
+
       line
     end
 
     def read(n = nil)
       return @io.read(n) if @peek_buf.nil?
       return @io.read(n) if @buffer_frozen && buffer_exhausted?
+
       buffered = @peek_buf.byteslice(@peek_pos..-1)
       out_enc = @emit_encoding || Encoding::ASCII_8BIT
       if n.nil?
         @peek_pos = @peek_buf.bytesize
         rest_from_io = @io.read
-        appended = rest_from_io ? rest_from_io.b : ''.b
+        appended = rest_from_io ? rest_from_io.b : "".b
         @peek_buf << appended unless @buffer_frozen
         combined = buffered + appended
         maybe_transcode(combined.force_encoding(out_enc))
@@ -101,7 +108,7 @@ module FlexJSON
       else
         @peek_pos = @peek_buf.bytesize
         rest_from_io = @io.read(n - buffered.bytesize)
-        appended = rest_from_io ? rest_from_io.b : ''.b
+        appended = rest_from_io ? rest_from_io.b : "".b
         @peek_buf << appended unless @buffer_frozen
         combined = buffered + appended
         maybe_transcode(combined.force_encoding(out_enc))
@@ -112,6 +119,7 @@ module FlexJSON
       return enum_for(:each_char) unless block_given?
       return @io.each_char(&block) if @peek_buf.nil?
       return @io.each_char(&block) if @buffer_frozen && buffer_exhausted?
+
       rest = @peek_buf.byteslice(@peek_pos..-1)
       rest.force_encoding(@emit_encoding || external_encoding || Encoding::ASCII_8BIT)
       rest = maybe_transcode(rest) || rest
@@ -120,6 +128,7 @@ module FlexJSON
       until @io.eof?
         chunk = @io.read(@buffer_size)
         break unless chunk
+
         @peek_buf << chunk.b unless @buffer_frozen
         chunk.force_encoding(@emit_encoding || external_encoding || Encoding::ASCII_8BIT)
         (maybe_transcode(chunk) || chunk).each_char(&block)
@@ -128,6 +137,7 @@ module FlexJSON
 
     def eof?
       return @io.eof? if buffer_exhausted?
+
       false
     end
 
@@ -164,6 +174,7 @@ module FlexJSON
     def extend_buffer!
       chunk = @io.read(@buffer_size)
       return false unless chunk && !chunk.empty?
+
       @peek_buf << chunk.b
       true
     end
@@ -172,8 +183,8 @@ module FlexJSON
       "\x00\x00\xFE\xFF".b,  # UTF-32 BE
       "\xFF\xFE\x00\x00".b,  # UTF-32 LE
       "\xEF\xBB\xBF".b,      # UTF-8
-      "\xFE\xFF".b,           # UTF-16 BE
-      "\xFF\xFE".b,           # UTF-16 LE
+      "\xFE\xFF".b, # UTF-16 BE
+      "\xFF\xFE".b # UTF-16 LE
     ].freeze
 
     def strip_bom(raw)
@@ -188,8 +199,10 @@ module FlexJSON
       MAX_ALIGN_BYTES.times do
         probe = raw.dup.force_encoding(@emit_encoding)
         return raw if probe.valid_encoding?
+
         extra = @io.read(1)
         break unless extra
+
         raw += extra.b
       end
       raw
@@ -197,8 +210,10 @@ module FlexJSON
 
     def maybe_transcode(str)
       return str unless str
+
       int = internal_encoding
       return str unless int && @emit_encoding && int != @emit_encoding
+
       str.force_encoding(@emit_encoding).encode(int, invalid: :replace, undef: :replace)
     end
   end
