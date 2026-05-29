@@ -309,8 +309,55 @@ second"')).to eq('firstsecond')
         expect(FlexJSON.parse("'''hello'''")).to eq('hello')
       end
 
-      it 'parses multi-line triple-quoted content' do
+      it 'parses an empty triple-quoted string' do
+        expect(FlexJSON.parse("''''''")).to eq('')
+      end
+
+      it 'parses multi-line content at column 0 (no stripping)' do
         expect(FlexJSON.parse("'''first\nsecond'''")).to eq("first\nsecond")
+      end
+
+      it 'does not process escapes — backslashes and quotes are literal' do
+        expect(FlexJSON.parse("'''a \\ b \"q\" c'''")).to eq('a \\ b "q" c')
+      end
+
+      describe "indentation stripping (based on opening ''' marker column)" do
+        it 'marker alone on its line: strips structural indent, preserves surplus' do
+          # opening ''' at column 4; content at 8/10/8 → keeps 4/6/4
+          input = "    '''\n        first line\n          indented line\n        last line\n    '''"
+          expect(FlexJSON.parse(input)).to eq("    first line\n      indented line\n    last line")
+        end
+
+        it 'strips exactly to the marker column when content aligns with it' do
+          # opening ''' at column 4; content also at 4 → fully stripped
+          input = "    '''\n    first line\n      indented line\n    last line\n    '''"
+          expect(FlexJSON.parse(input)).to eq("first line\n  indented line\nlast line")
+        end
+
+        it 'text on the opening line is taken verbatim, later lines stripped' do
+          input = "    '''first line\n      indented line\n    last line'''"
+          expect(FlexJSON.parse(input)).to eq("first line\n  indented line\nlast line")
+        end
+
+        it 'preserves a genuine blank line and the resulting trailing newline' do
+          input = "    '''\n    first line\n    last line\n\n    '''"
+          expect(FlexJSON.parse(input)).to eq("first line\nlast line\n")
+        end
+
+        it 'never strips into the text when a line has less indent than the marker' do
+          # opening ''' at column 4; a content line has only 2 leading spaces
+          input = "    '''\n  short\n        deep\n    '''"
+          expect(FlexJSON.parse(input)).to eq("short\n    deep")
+        end
+
+        it 'normalizes CRLF line endings to \\n inside the content' do
+          input = "    '''\r\n    a\r\n    b\r\n    '''"
+          expect(FlexJSON.parse(input)).to eq("a\nb")
+        end
+      end
+
+      it 'raises on an unterminated triple-quoted string' do
+        expect { FlexJSON.parse("'''never closed") }.to raise_error(FlexJSON::ParseError, /unterminated/)
       end
     end
 
