@@ -5,9 +5,16 @@ source "https://rubygems.org"
 # Specify your gem's dependencies in flex_json.gemspec
 gemspec
 
+# irb is part of stdlib (optional, useful for development/console)
 gem "irb"
-gem "rake", "~> 13.0"
 
-gem "rspec", "~> 3.0"
+group :development do
+  gem "awesome_print"
+  gem "rake"      # build/package tasks
+  gem "rubocop"   # linting only
+end
 
-gem "rubocop", "~> 1.21"
+group :test do
+  gem "rspec"
+  gem "simplecov", require: false
+end

@@ -1,0 +1,44 @@
+# General ignores for a Ruby gem
+*.gem
+
+# Ignore Bundler lockfile for gems (leave out for gems, include for apps)
+Gemfile.lock
+
+# Ignore RSpec status persistence
+.rspec_status
+
+# Ignore build output
+/pkg/
+/tmp/
+/log/
+/coverage/
+
+# Ignore RuboCop, Yard, docs, bundler
+/.bundle/
+.yardoc
+/.yardoc/
+/.byebug_history
+/.pry_history
+/.irb-history
+
+# Ignore Mac, editor, IDE artifacts
+.DS_Store
+*~
+*.swp
+*.swo
+*.tmp
+.vscode/
+.idea/
+
+# Ignore node_modules just in case
+node_modules/
+
+# Ignore test coverage output
+overage/
+
+# Ignore binary object files, extensions
+*.so
+*.o
+*.bundle
+*.rbc
+
