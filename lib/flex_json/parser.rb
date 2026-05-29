@@ -140,10 +140,53 @@ module FlexJSON
       end
     end
 
+    # Whitespace matches Ruby's [[:space:]] / Rails String#blank? (Unicode
+    # White_Space). ASCII is the fast path; multibyte arms are only reached
+    # when a byte >= 0x80 appears, and a reject-gate skips all non-candidate
+    # lead bytes in one comparison. Mirrors smarter_csv's leading_whitespace_len.
     def skip_pure_whitespace
-      while (b = byte) && (b == SPACE || b == TAB || b == LF || b == CR)
-        advance(1)
+      loop do
+        b = byte
+        break if b.nil?
+        if b == SPACE || (b >= TAB && b <= CR)   # 0x20, or 0x09..0x0D (tab LF VT FF CR)
+          advance(1)
+        elsif b >= 0x80
+          n = multibyte_ws_len(@pos)
+          break if n.zero?
+          @pos += n
+          @col += 1
+        else
+          break
+        end
       end
+    end
+
+    # Number of bytes of the Unicode-whitespace char starting at pos, or 0.
+    # Only called for bytes >= 0x80.
+    def multibyte_ws_len(pos)
+      b0 = @input.getbyte(pos)
+      # Reject-gate: only C2/E1/E2/E3 can begin a whitespace char.
+      return 0 if b0 != 0xC2 && (b0 < 0xE1 || b0 > 0xE3)
+      b1 = @input.getbyte(pos + 1)
+      return 0 if b1.nil?
+      if b0 == 0xC2
+        return (b1 == 0xA0 || b1 == 0x85) ? 2 : 0   # NBSP (common) or NEL
+      end
+      b2 = @input.getbyte(pos + 2)
+      return 0 if b2.nil?
+      case b0
+      when 0xE1
+        return 3 if b1 == 0x9A && b2 == 0x80        # U+1680
+      when 0xE2
+        if b1 == 0x80
+          return 3 if (b2 >= 0x80 && b2 <= 0x8A) || b2 == 0xA8 || b2 == 0xA9 || b2 == 0xAF
+        elsif b1 == 0x81 && b2 == 0x9F
+          return 3                                  # U+205F
+        end
+      when 0xE3
+        return 3 if b1 == 0x80 && b2 == 0x80        # U+3000
+      end
+      0
     end
 
     def skip_whitespace_and_comments
