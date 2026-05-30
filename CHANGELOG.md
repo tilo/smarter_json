@@ -1,6 +1,9 @@
 
 # FlexJSON Change Log
 
+## 0.3.3 (2026-05-30 unreleased)
+- adding Ryu for floating piont performance
+
 ## 0.3.3 (2026-05-29 unreleased)
 - performance fixes
 

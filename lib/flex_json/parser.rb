@@ -23,11 +23,15 @@ module FlexJSON
   # (FlexJSON::HAS_ACCELERATION); otherwise the pure-Ruby parser.
   #
   # With a block: yields each top-level value — JSONL / NDJSON, concatenated
-  # JSON, or whitespace-separated values — and returns nil. The block form is
-  # always pure-Ruby (the C extension parses a single document).
+  # JSON, or whitespace-separated values — and returns nil. Uses the C extension
+  # too when available (it yields each value from C); pure-Ruby otherwise.
   def parse(input, options = {}, &block)
     if block
-      Parser.new(input, options).each_value(&block)
+      if options.fetch(:acceleration, true) && HAS_ACCELERATION
+        parse_c(input, options, &block)
+      else
+        Parser.new(input, options).each_value(&block)
+      end
     elsif options.fetch(:acceleration, true) && HAS_ACCELERATION
       parse_c(input, options)
     else

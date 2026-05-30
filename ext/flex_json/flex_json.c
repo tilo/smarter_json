@@ -1,6 +1,10 @@
 #include "flex_json.h"
 #include <math.h>
 #include <string.h>
+#ifdef __ARM_NEON
+#include <arm_neon.h>
+#endif
+#include "vendor/ryu.h" /* Ryū string->double, correctly rounded (Ulf Adams, Apache-2.0) */
 
 /*
  * flex_json C extension — self-contained parser (no callbacks into Ruby parse
@@ -22,8 +26,6 @@ typedef struct {
   const char *buf;
   long len;
   long pos;
-  long line;
-  long col;
   rb_encoding *enc;
   int depth;
   int symbolize_keys;
@@ -32,11 +34,39 @@ typedef struct {
   int bigdecimal_load;  /* 0 = float, 1 = auto, 2 = bigdecimal */
 } fj_state;
 
+/* Line/column at the current byte position, computed lazily (only when raising
+ * an error) by scanning from the start of the buffer. CR, LF, and CRLF each
+ * count as one newline; col is bytes since the last line start (1-based).
+ * Keeping this off the hot path is the point — fj_advance never touches it. */
+static void fj_line_col(fj_state *st, long *line, long *col) {
+  long l = 1, c = 1, i;
+  long limit = (st->pos < st->len) ? st->pos : st->len;
+  for (i = 0; i < limit; i++) {
+    unsigned char b = (unsigned char)st->buf[i];
+    if (b == 0x0A) { l++; c = 1; }
+    else if (b == 0x0D) { l++; c = 1; if (i + 1 < st->len && (unsigned char)st->buf[i + 1] == 0x0A) i++; }
+    else c++;
+  }
+  *line = l;
+  *col = c;
+}
+
+/* 1-based column of the current byte position (bytes since the last line start).
+ * Used for triple-quoted indentation stripping (flex_json.md §2.3). */
+static long fj_column(fj_state *st) {
+  long c = 1, i = st->pos - 1;
+  while (i >= 0 && st->buf[i] != 0x0A && st->buf[i] != 0x0D) { c++; i--; }
+  return c;
+}
+
 /* Construct FlexJSON::ParseError(message, line, col) and raise it. */
 NORETURN(static void fj_error(fj_state *st, const char *msg));
 static void fj_error(fj_state *st, const char *msg) {
-  VALUE exc = rb_funcall(cParseError, rb_intern("new"), 3,
-                         rb_str_new_cstr(msg), LONG2NUM(st->line), LONG2NUM(st->col));
+  long line, col;
+  VALUE exc;
+  fj_line_col(st, &line, &col);
+  exc = rb_funcall(cParseError, rb_intern("new"), 3,
+                   rb_str_new_cstr(msg), LONG2NUM(line), LONG2NUM(col));
   rb_exc_raise(exc);
 }
 
@@ -51,20 +81,11 @@ static int fj_byte_at(fj_state *st, long off) {
 
 static int fj_eof(fj_state *st) { return st->pos >= st->len; }
 
+/* Advance the byte cursor by n (clamped to EOF). No line/col bookkeeping — that
+ * is computed lazily in fj_line_col only when an error is raised. */
 static void fj_advance(fj_state *st, long n) {
-  long i;
-  for (i = 0; i < n; i++) {
-    if (st->pos >= st->len) return;
-    unsigned char b = (unsigned char)st->buf[st->pos];
-    if (b == 0x0A) {
-      st->line++; st->col = 1; st->pos++;
-    } else if (b == 0x0D) {
-      st->line++; st->col = 1; st->pos++;
-      if (st->pos < st->len && (unsigned char)st->buf[st->pos] == 0x0A) st->pos++;
-    } else {
-      st->col++; st->pos++;
-    }
-  }
+  st->pos += n;
+  if (st->pos > st->len) st->pos = st->len;
 }
 
 /* ASCII whitespace: space, or 0x09..0x0D (tab, LF, VT, FF, CR). */
@@ -103,7 +124,6 @@ static void fj_skip_pure_ws(fj_state *st) {
       long m = fj_mbws(st->buf + st->pos, st->len - st->pos);
       if (m == 0) break;
       st->pos += m;
-      st->col++;
     } else {
       break;
     }
@@ -199,21 +219,47 @@ static unsigned long fj_read_hex4(fj_state *st) {
   return v;
 }
 
+/* Scan [p, end) for the first `quote` or backslash; returns a pointer to it, or
+ * `end` if neither occurs. NEON (16 bytes/iteration) on arm64, scalar elsewhere.
+ * With lazy line/col the caller advances past the whole run in O(1). */
+static const char *fj_scan_str(const char *p, const char *end, int quote) {
+#ifdef __ARM_NEON
+  const uint8x16_t vq  = vdupq_n_u8((uint8_t)quote);
+  const uint8x16_t vbs = vdupq_n_u8('\\');
+  while (p + 16 <= end) {
+    uint8x16_t chunk = vld1q_u8((const uint8_t *)p);
+    uint8x16_t m     = vorrq_u8(vceqq_u8(chunk, vq), vceqq_u8(chunk, vbs));
+    /* movemask emulation (Oj's technique): pack to 4 bits/byte, then ctz/4. */
+    uint8x8_t  res   = vshrn_n_u16(vreinterpretq_u16_u8(m), 4);
+    uint64_t   mask  = vget_lane_u64(vreinterpret_u64_u8(res), 0);
+    if (mask != 0) {
+      mask &= 0x8888888888888888ull;
+      return p + (__builtin_ctzll(mask) >> 2);
+    }
+    p += 16;
+  }
+#endif
+  for (; p < end; p++) {
+    if (*p == (char)quote || *p == '\\') return p;
+  }
+  return end;
+}
+
 static VALUE fj_parse_string(fj_state *st, int quote) {
   long start;
   VALUE buf;
   int b;
+  const char *hit;
   fj_advance(st, 1); /* opening quote */
   start = st->pos;
-  while ((b = fj_byte(st)) != -1) {
-    if (b == quote) {
-      VALUE s = rb_enc_str_new(st->buf + start, st->pos - start, st->enc);
-      fj_advance(st, 1);
-      return s;
-    } else if (b == '\\') {
-      break;
-    }
+  /* Fast scan to the closing quote or the first backslash. */
+  hit = fj_scan_str(st->buf + st->pos, st->buf + st->len, quote);
+  fj_advance(st, hit - (st->buf + st->pos));
+  b = fj_byte(st);
+  if (b == quote) {
+    VALUE s = rb_enc_str_new(st->buf + start, st->pos - start, st->enc);
     fj_advance(st, 1);
+    return s;
   }
   if (b == -1) fj_error(st, "unterminated string");
 
@@ -356,23 +402,75 @@ static VALUE fj_to_bigdecimal_token(const char *p, long n) {
   return rb_funcall(rb_cObject, fj_bigdecimal_id, 1, s);
 }
 
-/* Convert an integer token [p, p+n) (followed by a delimiter in the buffer).
- * Fast path: no underscore -> convert straight from the buffer (no allocation,
- * stops at the delimiter). Only allocate a cleaned copy when an underscore is
- * present. Bignums are handled by rb_cstr_to_inum / rb_str_to_inum. */
+/* Convert an integer token [p, p+n). Fast path: accumulate the digits into a
+ * uint64 in one pass (skipping '_') and return directly — no library call, no
+ * allocation. Tokens with more than 18 digits (which may exceed int64) fall back
+ * to the bignum path (rb_cstr_to_inum / rb_str_to_inum). */
 static VALUE fj_int_value(const char *p, long n) {
+  uint64_t m = 0;
+  int neg = 0, digits = 0;
+  long i = 0;
+
+  if (i < n && (p[i] == '+' || p[i] == '-')) { neg = (p[i] == '-'); i++; }
+  for (; i < n; i++) {
+    if (p[i] == '_') continue;
+    if (++digits > 18) break; /* may exceed int64 — use the bignum path */
+    m = m * 10 + (uint64_t)(p[i] - '0');
+  }
+  if (digits >= 1 && digits <= 18) {
+    int64_t v = (int64_t)m;
+    return LL2NUM(neg ? -v : v);
+  }
   if (memchr(p, '_', (size_t)n) == NULL) return rb_cstr_to_inum(p, 10, 0);
   return rb_str_to_inum(fj_strip_underscores(p, n), 10, 0);
 }
 
-/* Convert a decimal token [p, p+n) per bigdecimal_load: :float -> Float,
- * :bigdecimal -> BigDecimal, :auto -> BigDecimal when the mantissa has >16
- * significant digits (Oj's threshold), else Float. Float conversion takes the
- * allocation-free buffer path unless an underscore is present. */
+/* Convert a decimal token [p, p+n). :bigdecimal (or :auto with >16 significant
+ * digits) -> BigDecimal. Otherwise Float: extract the base-10 mantissa and
+ * exponent in one pass (skipping '_') and convert with Ryū — correctly rounded,
+ * no strtod. Mantissa digits and the e10 = exponent - fractional_digits formula
+ * mirror the json gem exactly; >17 mantissa digits or the subnormal range fall
+ * back to rb_cstr_to_dbl. */
 static VALUE fj_decimal_value(fj_state *st, const char *p, long n) {
+  uint64_t m10 = 0;
+  int m10digits = 0, neg = 0, frac = 0, in_frac = 0, overflow = 0;
+  int64_t e10 = 0;
+  long i = 0;
+
   if (st->bigdecimal_load == 2 || (st->bigdecimal_load == 1 && fj_sig_digits(p, n) > 16)) {
     return fj_to_bigdecimal_token(p, n);
   }
+
+  if (i < n && (p[i] == '+' || p[i] == '-')) { neg = (p[i] == '-'); i++; }
+  for (; i < n; i++) {
+    char c = p[i];
+    if (c == '_') continue;
+    if (c == '.') { in_frac = 1; continue; }
+    if (c == 'e' || c == 'E') break;
+    if (++m10digits > 18) { overflow = 1; break; } /* keep m10 within uint64 */
+    m10 = m10 * 10 + (uint64_t)(c - '0');
+    if (in_frac) frac++;
+  }
+  if (!overflow && i < n && (p[i] == 'e' || p[i] == 'E')) {
+    int eneg = 0;
+    i++;
+    if (i < n && (p[i] == '+' || p[i] == '-')) { eneg = (p[i] == '-'); i++; }
+    for (; i < n; i++) {
+      if (p[i] == '_') continue;
+      e10 = e10 * 10 + (p[i] - '0');
+      if (e10 > 1000000) { overflow = 1; break; } /* extreme exponent — let strtod handle it */
+    }
+    if (eneg) e10 = -e10;
+  }
+  e10 -= frac;
+
+  /* Ryū fast path: <=17 mantissa digits and not in the subnormal range. */
+  if (!overflow && m10digits >= 1 && m10digits <= 17 && (long)m10digits + e10 >= -307) {
+    if (m10 == 0) return rb_float_new(neg ? -0.0 : 0.0);
+    return rb_float_new(ryu_s2d_from_parts(m10, m10digits, (int32_t)e10, neg != 0));
+  }
+
+  /* Fallback for >17 digits / extreme or subnormal exponents. */
   if (memchr(p, '_', (size_t)n) == NULL) return rb_float_new(rb_cstr_to_dbl(p, 0));
   return rb_float_new(rb_str_to_dbl(fj_strip_underscores(p, n), 0));
 }
@@ -616,7 +714,7 @@ static VALUE fj_parse_quoteless_or_literal(fj_state *st) {
       fj_advance(st, 1);
     } else if (b >= 0x80) {
       long m = fj_mbws(st->buf + st->pos, st->len - st->pos);
-      if (m > 0) { prev_ws = 1; st->pos += m; st->col++; }
+      if (m > 0) { prev_ws = 1; st->pos += m; }
       else { prev_ws = 0; fj_advance(st, 1); }
     } else {
       prev_ws = 0;
@@ -680,7 +778,7 @@ static VALUE fj_strip_triple(const char *p, long n, long indent, rb_encoding *en
 }
 
 static VALUE fj_parse_triple_quoted(fj_state *st) {
-  long indent = st->col - 1;
+  long indent = fj_column(st) - 1;
   long raw_start;
   VALUE r;
   fj_advance(st, 3);
@@ -891,14 +989,14 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
  * object (no outer braces). Look ahead without consuming. */
 static int fj_implicit_root_ahead(fj_state *st) {
   int b = fj_byte(st), result;
-  long sp, sl, sc;
+  long sp;
   if (b == -1 || !fj_is_key_start(b)) return 0;
-  sp = st->pos; sl = st->line; sc = st->col;
+  sp = st->pos;
   fj_advance(st, 1);
   while ((b = fj_byte(st)) != -1 && fj_is_key_continue(b)) fj_advance(st, 1);
   fj_skip_pure_ws(st);
   result = (fj_byte(st) == ':');
-  st->pos = sp; st->line = sl; st->col = sc;
+  st->pos = sp;
   return result;
 }
 
@@ -921,8 +1019,6 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
   st.buf = RSTRING_PTR(input);
   st.len = RSTRING_LEN(input);
   st.pos = 0;
-  st.line = 1;
-  st.col = 1;
   st.enc = rb_enc_get(input);
   st.depth = 0;
 
@@ -941,6 +1037,17 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
   if (st.len >= 3 && (unsigned char)st.buf[0] == 0xEF &&
       (unsigned char)st.buf[1] == 0xBB && (unsigned char)st.buf[2] == 0xBF) {
     st.pos = 3;
+  }
+
+  /* With a block: yield each top-level value until EOF (JSONL / NDJSON /
+   * concatenated). Same loop as the Ruby each_value path, on the C parser. */
+  if (rb_block_given_p()) {
+    for (;;) {
+      fj_skip_ws_comments(&st);
+      if (fj_eof(&st)) break;
+      rb_yield(fj_parse_iter(&st, fj_implicit_root_ahead(&st)));
+    }
+    return Qnil;
   }
 
   fj_skip_ws_comments(&st);
