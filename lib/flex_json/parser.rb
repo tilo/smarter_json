@@ -4,7 +4,7 @@ module FlexJSON
   class ParseError < StandardError
     attr_reader :line, :col
 
-    def initialize(message, line: nil, col: nil)
+    def initialize(message, line = nil, col = nil)
       @line = line
       @col = col
       super(line && col ? "#{message} at line #{line}, col #{col}" : message)
@@ -15,23 +15,32 @@ module FlexJSON
 
   module_function
 
-  def parse(input, **opts)
-    Parser.new(input, **opts).parse
+  # One options hash; the values given override Parser::DEFAULT_OPTIONS.
+  # :acceleration (default true) selects the C extension when it is compiled and
+  # loaded (FlexJSON::HAS_ACCELERATION); otherwise the pure-Ruby parser.
+  def parse(input, options = {})
+    if options.fetch(:acceleration, true) && HAS_ACCELERATION
+      parse_c(input, options)
+    else
+      Parser.new(input, options).parse
+    end
   end
 
   # Returns an Array of every top-level value in the input.
   # Handles JSONL / NDJSON, concatenated JSON, and "misplaced value"
-  # input without dropping anything.
-  def parse_many(input, **opts)
-    Parser.new(input, **opts).parse_all
+  # input without dropping anything. (C acceleration for multi-document
+  # input is a later increment; this always uses the pure-Ruby parser.)
+  def parse_many(input, options = {})
+    Parser.new(input, options).parse_all
   end
 
   # The :encoding option labels the input's encoding (default "UTF-8").
   # It does NOT trigger a transcoding pass — the parser works on bytes in
   # their native encoding and emits string values with the same tag.
-  def parse_file(path, encoding: "UTF-8", **opts)
+  def parse_file(path, options = {})
+    encoding = options.fetch(:encoding, "UTF-8")
     input = File.read(path, encoding: encoding)
-    parse(input, **opts)
+    parse(input, options)
   end
 
   # Hand-rolled FSM single-pass parser.
@@ -89,9 +98,26 @@ module FlexJSON
     BLANK_HEAD  = /\A[[:space:]]+/.freeze
     BLANK_TAIL  = /[[:space:]]+\z/.freeze
 
-    def initialize(input, encoding: nil, symbolize_keys: false, duplicate_key: :last_wins, max_depth: 512, **_opts)
+    # All caller-facing settings live in one options hash (smarter_csv style).
+    DEFAULT_OPTIONS = {
+      acceleration: true, # use the C extension when available
+      encoding: nil, # label the input's encoding (no transcoding)
+      symbolize_keys: false, # Symbol keys instead of String
+      duplicate_key: :last_wins, # :last_wins | :first_wins | :raise
+      max_depth: 512, # guard against pathological nesting
+      bigdecimal_load: :auto, # :auto | :float | :bigdecimal (Oj-compatible)
+    }.freeze
+
+    def initialize(input, options = {})
       raise ArgumentError, "input must be a String" unless input.is_a?(String)
 
+      opts = DEFAULT_OPTIONS.merge(options)
+      @symbolize_keys  = opts[:symbolize_keys]
+      @duplicate_key   = opts[:duplicate_key]
+      @max_depth       = opts[:max_depth]
+      @bigdecimal_load = opts[:bigdecimal_load]
+
+      encoding = opts[:encoding]
       @input = encoding ? input.dup.force_encoding(encoding) : input
       raise EncodingError, "invalid byte sequence for #{@input.encoding.name}" unless @input.valid_encoding?
 
@@ -100,9 +126,6 @@ module FlexJSON
       @pos = @input.getbyte(0) == 0xEF && @input.getbyte(1) == 0xBB && @input.getbyte(2) == 0xBF ? 3 : 0
       @line = 1
       @col = 1
-      @symbolize_keys = symbolize_keys
-      @duplicate_key = duplicate_key
-      @max_depth = max_depth
       @depth = 0
     end
 
@@ -545,7 +568,33 @@ module FlexJSON
       return NOT_NUMERIC unless DEC_RE.match?(str) && str.match?(/[0-9]/)
 
       body = str.delete("_")
-      body.match?(/[.eE]/) ? body.to_f : body.to_i
+      body.match?(/[.eE]/) ? decimal_value(body) : body.to_i
+    end
+
+    # A decimal (has '.' or exponent). bigdecimal_load: :float -> Float,
+    # :bigdecimal -> BigDecimal, :auto -> BigDecimal when the mantissa has more
+    # than 16 significant digits (Oj's DEC_MAX threshold), else Float.
+    def decimal_value(body)
+      case @bigdecimal_load
+      when :float      then body.to_f
+      when :bigdecimal then to_big_decimal(body)
+      else                  significant_digits(body) > 16 ? to_big_decimal(body) : body.to_f
+      end
+    end
+
+    def significant_digits(body)
+      body.sub(/[eE].*\z/, "").gsub(/[^0-9]/, "").sub(/\A0+/, "").length
+    end
+
+    def to_big_decimal(body)
+      BigDecimal(normalize_for_bigdecimal(body))
+    rescue ArgumentError
+      body.to_f
+    end
+
+    # BigDecimal() rejects a bare leading/trailing dot (".5", "5.", "5.e3").
+    def normalize_for_bigdecimal(body)
+      body.sub(/\A([+-]?)\./, '\10.').sub(/\.([eE]|\z)/, '.0\1')
     end
 
     # --- quoted strings ---
@@ -747,7 +796,7 @@ module FlexJSON
       end
 
       slice = @input.byteslice(int_start, @pos - int_start).delete("_")
-      value = is_float ? slice.to_f : slice.to_i
+      value = is_float ? decimal_value(slice) : slice.to_i
       negative ? -value : value
     end
 
@@ -770,7 +819,7 @@ module FlexJSON
     end
 
     def error(message)
-      ParseError.new(message, line: @line, col: @col)
+      ParseError.new(message, @line, @col)
     end
 
     def display_byte(b)

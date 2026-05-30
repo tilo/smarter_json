@@ -43,9 +43,11 @@ Gem::Specification.new do |spec|
   spec.bindir = "exe"
   spec.executables = spec.files.grep(%r{\Aexe/}) { |f| File.basename(f) }
   spec.require_paths = ["lib"]
+  spec.extensions = ["ext/flex_json/extconf.rb"]
 
-  # Uncomment to register a new dependency of your gem
-  # spec.add_dependency "example-gem", "~> 1.0"
+  # bigdecimal is no longer a default gem on Ruby 3.4+; needed for
+  # bigdecimal_load: :auto / :bigdecimal (Oj-compatible decimal loading).
+  spec.add_dependency "bigdecimal"
 
   # For more information and examples about making a new gem, check out our
   # guide at: https://guides.rubygems.org/make-your-own-gem/

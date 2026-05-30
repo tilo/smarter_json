@@ -10,8 +10,9 @@ gem "irb"
 
 group :development do
   gem "awesome_print"
-  gem "rake"      # build/package tasks
-  gem "rubocop"   # linting only
+  gem "rake"            # build/package tasks
+  gem "rake-compiler"   # builds the C extension
+  gem "rubocop"         # linting only
 end
 
 group :test do
