@@ -21,6 +21,16 @@ static VALUE mFlexJSON;
 static VALUE cParseError;
 static VALUE cEncodingError;
 static ID    fj_bigdecimal_id; /* cached BigDecimal() method id (set in Init) */
+static ID    fj_to_sym_id;     /* cached :to_sym (symbolize_keys) */
+static ID    fj_key_p_id;      /* cached :key? (non-default duplicate_key modes) */
+
+/* Per-parse direct-mapped key cache: key bytes -> the interned (frozen,
+ * globally-rooted) String, so repeated keys skip the global fstring lookup.
+ * Only used when rb_enc_interned_str is available — the cached strings are then
+ * kept alive by the interned-string table, so the cache needs no GC marking. */
+#define FJ_KCACHE_BITS 9
+#define FJ_KCACHE_SIZE (1 << FJ_KCACHE_BITS)
+typedef struct { long len; VALUE str; } fj_kc_slot;
 
 typedef struct {
   const char *buf;
@@ -32,6 +42,7 @@ typedef struct {
   int dup_first_wins;
   int dup_raise;
   int bigdecimal_load;  /* 0 = float, 1 = auto, 2 = bigdecimal */
+  fj_kc_slot *kcache;   /* per-parse key cache (NULL when interning unavailable) */
 } fj_state;
 
 /* Line/column at the current byte position, computed lazily (only when raising
@@ -552,11 +563,25 @@ static int fj_is_key_continue(int b) {
  * rb_enc_interned_str) this falls back to a plain string — Hash#[]= still dedups
  * the key on store, just without saving the allocation. Keys only: values are
  * rarely repeated, so interning them wouldn't pay off (this matches Oj). */
-static inline VALUE fj_key_str(const char *p, long n, rb_encoding *enc) {
+static inline VALUE fj_key_str(fj_state *st, const char *p, long n) {
 #ifdef HAVE_RB_ENC_INTERNED_STR
-  return rb_enc_interned_str(p, n, enc);
+  if (st->kcache != NULL) {
+    uint64_t    h = 1469598103934665603ULL; /* FNV-1a over the key bytes */
+    long        i;
+    fj_kc_slot *slot;
+    for (i = 0; i < n; i++) { h ^= (unsigned char)p[i]; h *= 1099511628211ULL; }
+    slot = &st->kcache[(size_t)((h ^ (h >> FJ_KCACHE_BITS)) & (FJ_KCACHE_SIZE - 1))];
+    if (slot->str != Qfalse && slot->len == n &&
+        memcmp(RSTRING_PTR(slot->str), p, (size_t)n) == 0) {
+      return slot->str; /* hit — skip the global fstring lookup */
+    }
+    slot->str = rb_enc_interned_str(p, n, st->enc);
+    slot->len = n;
+    return slot->str;
+  }
+  return rb_enc_interned_str(p, n, st->enc);
 #else
-  return rb_enc_str_new(p, n, enc);
+  return rb_enc_str_new(p, n, st->enc);
 #endif
 }
 
@@ -565,7 +590,7 @@ static VALUE fj_parse_identifier_key(fj_state *st) {
   int b;
   fj_advance(st, 1);
   while ((b = fj_byte(st)) != -1 && fj_is_key_continue(b)) fj_advance(st, 1);
-  return fj_key_str(st->buf + start, st->pos - start, st->enc);
+  return fj_key_str(st, st->buf + start, st->pos - start);
 }
 
 static VALUE fj_parse_object_key(fj_state *st) {
@@ -580,7 +605,7 @@ static VALUE fj_parse_object_key(fj_state *st) {
       char c = st->buf[i];
       if (c == (char)b) {
         long  cstart = st->pos + 1;
-        VALUE k      = fj_key_str(st->buf + cstart, i - cstart, st->enc);
+        VALUE k      = fj_key_str(st, st->buf + cstart, i - cstart);
         fj_advance(st, i - st->pos + 1); /* consume opening quote .. closing quote */
         return k;
       }
@@ -834,10 +859,15 @@ static VALUE fj_parse_smart_string(fj_state *st, int kind) {
 /* --- containers --- */
 
 static void fj_store_member(fj_state *st, VALUE hash, VALUE key, VALUE value) {
-  VALUE k = st->symbolize_keys ? rb_funcall(key, rb_intern("to_sym"), 0) : key;
-  if (RTEST(rb_funcall(hash, rb_intern("key?"), 1, k))) {
-    if (st->dup_first_wins) return;
-    if (st->dup_raise) fj_error(st, "duplicate key");
+  VALUE k = st->symbolize_keys ? rb_funcall(key, fj_to_sym_id, 0) : key;
+  /* Only :first_wins / :raise need a per-member lookup; the default :last_wins
+   * is just an overwrite, which rb_hash_aset already does — so don't pay a
+   * Ruby method dispatch per member in the common case. */
+  if (st->dup_first_wins || st->dup_raise) {
+    if (RTEST(rb_funcall(hash, fj_key_p_id, 1, k))) {
+      if (st->dup_first_wins) return;
+      fj_error(st, "duplicate key");
+    }
   }
   rb_hash_aset(hash, k, value);
 }
@@ -1021,6 +1051,13 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
   st.pos = 0;
   st.enc = rb_enc_get(input);
   st.depth = 0;
+#ifdef HAVE_RB_ENC_INTERNED_STR
+  fj_kc_slot kcache[FJ_KCACHE_SIZE];
+  memset(kcache, 0, sizeof(kcache));
+  st.kcache = kcache;
+#else
+  st.kcache = NULL;
+#endif
 
   st.symbolize_keys = RTEST(rb_hash_aref(opts, ID2SYM(rb_intern("symbolize_keys"))));
   dk = rb_hash_aref(opts, ID2SYM(rb_intern("duplicate_key")));
@@ -1065,5 +1102,7 @@ void Init_flex_json(void) {
   cParseError = rb_const_get(mFlexJSON, rb_intern("ParseError"));
   cEncodingError = rb_const_get(mFlexJSON, rb_intern("EncodingError"));
   fj_bigdecimal_id = rb_intern("BigDecimal");
+  fj_to_sym_id = rb_intern("to_sym");
+  fj_key_p_id = rb_intern("key?");
   rb_define_module_function(mFlexJSON, "parse_c", fj_parse_c, 2);
 }
