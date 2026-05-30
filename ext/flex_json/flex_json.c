@@ -16,6 +16,7 @@
 static VALUE mFlexJSON;
 static VALUE cParseError;
 static VALUE cEncodingError;
+static ID    fj_bigdecimal_id; /* cached BigDecimal() method id (set in Init) */
 
 typedef struct {
   const char *buf;
@@ -24,7 +25,6 @@ typedef struct {
   long line;
   long col;
   rb_encoding *enc;
-  int max_depth;
   int depth;
   int symbolize_keys;
   int dup_first_wins;
@@ -157,9 +157,6 @@ static void fj_skip_ws_comments(fj_state *st) {
 /* forward declarations (mutual recursion) */
 static VALUE fj_parse_value(fj_state *st);
 static VALUE fj_parse_member_value(fj_state *st);
-static VALUE fj_parse_object(fj_state *st);
-static VALUE fj_parse_array(fj_state *st);
-static VALUE fj_parse_members(fj_state *st, int implicit);
 
 static void fj_append_utf8(VALUE buf, unsigned long cp) {
   char tmp[4];
@@ -309,22 +306,54 @@ static long fj_sig_digits(const char *p, long n) {
   return cnt;
 }
 
-/* BigDecimal() rejects a bare leading/trailing dot (".5", "5.", "5.e3"). */
-static VALUE fj_normalize_decimal(VALUE s) {
-  const char *p = RSTRING_PTR(s);
-  long n = RSTRING_LEN(s), i = 0;
-  VALUE out = rb_str_buf_new(n + 2);
-  if (i < n && (p[i] == '+' || p[i] == '-')) { rb_str_buf_cat(out, p + i, 1); i++; }
-  if (i < n && p[i] == '.') rb_str_buf_cat(out, "0", 1);
+/* A decimal token can go straight to BigDecimal() unchanged unless it has an
+ * underscore (flex_json leniency) or a dot that BigDecimal() rejects: a leading
+ * dot (".5") or a dot not followed by a digit ("5.", "5.e3"). */
+static int fj_decimal_is_clean(const char *p, long n) {
+  long i = 0;
+  if (memchr(p, '_', (size_t)n) != NULL) return 0;
+  if (i < n && (p[i] == '+' || p[i] == '-')) i++;
+  if (i < n && p[i] == '.') return 0;
   for (; i < n; i++) {
-    rb_str_buf_cat(out, p + i, 1);
-    if (p[i] == '.' && (i + 1 >= n || p[i + 1] == 'e' || p[i + 1] == 'E')) rb_str_buf_cat(out, "0", 1);
+    if (p[i] == '.') {
+      char nx = (i + 1 < n) ? p[i + 1] : '\0';
+      if (nx < '0' || nx > '9') return 0;
+    }
   }
-  return out;
+  return 1;
 }
 
-static VALUE fj_to_bigdecimal(VALUE str) {
-  return rb_funcall(rb_cObject, rb_intern("BigDecimal"), 1, fj_normalize_decimal(str));
+/* Build a BigDecimal from a decimal token. Fast path (the common case): the raw
+ * token bytes go straight to BigDecimal() via the cached method id — the same
+ * shape Oj uses, no normalization, no extra allocation beyond the String. Only
+ * when the token has an underscore or a bare/trailing dot do we clean it, in a
+ * single C pass (no per-byte rb_str appends), then one rb_str_new. The grammar
+ * was already validated by the caller, so BigDecimal() can't raise on a clean
+ * token — no rescue frame (one fewer than Oj). */
+static VALUE fj_to_bigdecimal_token(const char *p, long n) {
+  char  stack[64];
+  char *buf;
+  long  i = 0, w = 0;
+  VALUE s;
+
+  if (fj_decimal_is_clean(p, n)) {
+    return rb_funcall(rb_cObject, fj_bigdecimal_id, 1, rb_str_new(p, n));
+  }
+
+  buf = (n + 2 <= (long)sizeof(stack)) ? stack : ruby_xmalloc((size_t)(n + 2));
+  if (i < n && (p[i] == '+' || p[i] == '-')) buf[w++] = p[i++];
+  if (i < n && p[i] == '.') buf[w++] = '0';                    /* ".5" -> "0.5" */
+  for (; i < n; i++) {
+    if (p[i] == '_') continue;
+    buf[w++] = p[i];
+    if (p[i] == '.') {
+      char nx = (i + 1 < n) ? p[i + 1] : '\0';
+      if (nx == 'e' || nx == 'E' || nx == '\0') buf[w++] = '0'; /* "5." -> "5.0" */
+    }
+  }
+  s = rb_str_new(buf, w);
+  if (buf != stack) ruby_xfree(buf);
+  return rb_funcall(rb_cObject, fj_bigdecimal_id, 1, s);
 }
 
 /* Convert an integer token [p, p+n) (followed by a delimiter in the buffer).
@@ -342,7 +371,7 @@ static VALUE fj_int_value(const char *p, long n) {
  * allocation-free buffer path unless an underscore is present. */
 static VALUE fj_decimal_value(fj_state *st, const char *p, long n) {
   if (st->bigdecimal_load == 2 || (st->bigdecimal_load == 1 && fj_sig_digits(p, n) > 16)) {
-    return fj_to_bigdecimal(fj_strip_underscores(p, n));
+    return fj_to_bigdecimal_token(p, n);
   }
   if (memchr(p, '_', (size_t)n) == NULL) return rb_float_new(rb_cstr_to_dbl(p, 0));
   return rb_float_new(rb_str_to_dbl(fj_strip_underscores(p, n), 0));
@@ -420,19 +449,51 @@ static int fj_is_key_continue(int b) {
   return fj_is_key_start(b) || (b >= '0' && b <= '9') || b == '-';
 }
 
+/* Intern an object key (frozen, deduplicated) so repeated keys across records
+ * share one String and skip a per-occurrence allocation. On Ruby < 3.0 (no
+ * rb_enc_interned_str) this falls back to a plain string — Hash#[]= still dedups
+ * the key on store, just without saving the allocation. Keys only: values are
+ * rarely repeated, so interning them wouldn't pay off (this matches Oj). */
+static inline VALUE fj_key_str(const char *p, long n, rb_encoding *enc) {
+#ifdef HAVE_RB_ENC_INTERNED_STR
+  return rb_enc_interned_str(p, n, enc);
+#else
+  return rb_enc_str_new(p, n, enc);
+#endif
+}
+
 static VALUE fj_parse_identifier_key(fj_state *st) {
   long start = st->pos;
   int b;
   fj_advance(st, 1);
   while ((b = fj_byte(st)) != -1 && fj_is_key_continue(b)) fj_advance(st, 1);
-  return rb_enc_str_new(st->buf + start, st->pos - start, st->enc);
+  return fj_key_str(st->buf + start, st->pos - start, st->enc);
 }
 
 static VALUE fj_parse_object_key(fj_state *st) {
   int b = fj_byte(st);
-  if (b == '"') return fj_parse_string(st, '"');
-  if (b == '\'') return fj_parse_string(st, '\'');
+
+  /* Quoted key. The common case has no escapes: intern straight from the buffer
+   * with no throwaway allocation. An escaped key (rare) falls through to the
+   * full string parser; Hash#[]= still dedups it on store. */
+  if (b == '"' || b == '\'') {
+    long i = st->pos + 1;
+    while (i < st->len) {
+      char c = st->buf[i];
+      if (c == (char)b) {
+        long  cstart = st->pos + 1;
+        VALUE k      = fj_key_str(st->buf + cstart, i - cstart, st->enc);
+        fj_advance(st, i - st->pos + 1); /* consume opening quote .. closing quote */
+        return k;
+      }
+      if (c == '\\') break;
+      i++;
+    }
+    return fj_parse_string(st, b);
+  }
+
   if (fj_is_key_start(b)) return fj_parse_identifier_key(st);
+
   fj_error(st, "expected a key");
   return Qnil; /* unreachable */
 }
@@ -683,72 +744,12 @@ static void fj_store_member(fj_state *st, VALUE hash, VALUE key, VALUE value) {
   rb_hash_aset(hash, k, value);
 }
 
-static VALUE fj_parse_members(fj_state *st, int implicit) {
-  VALUE hash = rb_hash_new();
-  for (;;) {
-    int b;
-    VALUE key, value;
-    fj_skip_ws_comments(st);
-    b = fj_byte(st);
-    if (b == '}') {
-      if (implicit) fj_error(st, "unexpected '}'");
-      fj_advance(st, 1);
-      return hash;
-    }
-    if (b == -1) {
-      if (implicit) return hash;
-      fj_error(st, "unterminated object");
-    }
-    if (b == ']') fj_error(st, "unexpected ']' — expected a key or '}'");
-    key = fj_parse_object_key(st);
-    fj_skip_ws_comments(st);
-    if (fj_byte(st) != ':') fj_error(st, "expected ':' after object key");
-    fj_advance(st, 1);
-    value = fj_parse_member_value(st);
-    fj_store_member(st, hash, key, value);
-    fj_skip_ws_comments(st);            /* skip_separator_run */
-    if (fj_byte(st) == ',') fj_advance(st, 1);
-  }
-}
-
-static VALUE fj_parse_object(fj_state *st) {
-  VALUE r;
-  st->depth++;
-  if (st->depth > st->max_depth) fj_error(st, "maximum nesting depth exceeded");
-  fj_advance(st, 1); /* { */
-  r = fj_parse_members(st, 0);
-  st->depth--;
-  return r;
-}
-
-static VALUE fj_parse_array(fj_state *st) {
-  VALUE ary;
-  st->depth++;
-  if (st->depth > st->max_depth) fj_error(st, "maximum nesting depth exceeded");
-  fj_advance(st, 1); /* [ */
-  ary = rb_ary_new();
-  for (;;) {
-    int b;
-    fj_skip_ws_comments(st);
-    b = fj_byte(st);
-    if (b == ']') { fj_advance(st, 1); st->depth--; return ary; }
-    if (b == -1) fj_error(st, "unterminated array");
-    if (b == '}') fj_error(st, "unexpected '}' — expected ']' or a value");
-    rb_ary_push(ary, fj_parse_member_value(st));
-    fj_skip_ws_comments(st);            /* skip_separator_run */
-    if (fj_byte(st) == ',') fj_advance(st, 1);
-  }
-}
-
-/* Value in object-value or array-element position: quoteless allowed. */
+/* Value in object-value or array-element position (scalar only — containers
+ * are handled by the iterative driver below). Quoteless allowed. Assumes the
+ * caller has already skipped whitespace/comments and checked for EOF. */
 static VALUE fj_parse_member_value(fj_state *st) {
-  int b;
-  fj_skip_ws_comments(st);
-  if (fj_eof(st)) fj_error(st, "unexpected end of input");
-  b = fj_byte(st);
+  int b = fj_byte(st);
   switch (b) {
-    case '{':  return fj_parse_object(st);
-    case '[':  return fj_parse_array(st);
     case '"':  return fj_parse_string(st, '"');
     case '\'': return fj_parse_single_or_triple(st);
     default: {
@@ -759,15 +760,10 @@ static VALUE fj_parse_member_value(fj_state *st) {
   }
 }
 
-/* Top-level / strict value: no quoteless fallback. */
+/* Top-level / strict scalar (no quoteless; containers handled by the driver). */
 static VALUE fj_parse_value(fj_state *st) {
-  int b;
-  fj_skip_ws_comments(st);
-  if (fj_eof(st)) fj_error(st, "unexpected end of input");
-  b = fj_byte(st);
+  int b = fj_byte(st);
   switch (b) {
-    case '{':  return fj_parse_object(st);
-    case '[':  return fj_parse_array(st);
     case '"':  return fj_parse_string(st, '"');
     case '\'': return fj_parse_single_or_triple(st);
     case 't':  return fj_parse_literal(st, "true", Qtrue);
@@ -792,6 +788,105 @@ static VALUE fj_parse_value(fj_state *st) {
   return Qnil; /* unreachable */
 }
 
+/* Iterative container parser — explicit stack, no C recursion, so nesting is
+ * bounded only by memory (like Oj), not the C call stack. Each new container is
+ * attached to its parent immediately, and the working stack is a Ruby Array, so
+ * the whole partial tree stays reachable from `root` (GC-safe) and the stack
+ * frees itself. */
+static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
+  VALUE stack = rb_ary_new();
+  VALUE root = Qnil;
+  VALUE cur = Qundef;   /* innermost container, or Qundef while at top level */
+  int cur_obj = 0;
+
+  if (implicit_root) {
+    root = rb_hash_new();
+    rb_ary_push(stack, root);
+    cur = root;
+    cur_obj = 1;
+  }
+
+  for (;;) {
+    int b;
+
+    if (cur == Qundef) { /* top level: parse exactly one value */
+      fj_skip_ws_comments(st);
+      b = fj_byte(st);
+      if (b == '{') { fj_advance(st, 1); root = rb_hash_new(); rb_ary_push(stack, root); cur = root; cur_obj = 1; continue; }
+      if (b == '[') { fj_advance(st, 1); root = rb_ary_new();  rb_ary_push(stack, root); cur = root; cur_obj = 0; continue; }
+      if (b == -1) fj_error(st, "unexpected end of input");
+      return fj_parse_value(st);
+    }
+
+    if (cur_obj) {
+      VALUE key;
+      fj_skip_ws_comments(st);
+      b = fj_byte(st);
+      if (b == '}') {
+        fj_advance(st, 1);
+        rb_ary_pop(stack);
+        if (RARRAY_LEN(stack) == 0) return root;
+        cur = rb_ary_entry(stack, RARRAY_LEN(stack) - 1);
+        cur_obj = RB_TYPE_P(cur, T_HASH);
+        fj_skip_ws_comments(st);
+        if (fj_byte(st) == ',') fj_advance(st, 1);
+        continue;
+      }
+      if (b == -1) {
+        if (implicit_root && RARRAY_LEN(stack) == 1) return root;
+        fj_error(st, "unterminated object");
+      }
+      if (b == ']') fj_error(st, "unexpected ']' — expected a key or '}'");
+      key = fj_parse_object_key(st);
+      fj_skip_ws_comments(st);
+      if (fj_byte(st) != ':') fj_error(st, "expected ':' after object key");
+      fj_advance(st, 1);
+      fj_skip_ws_comments(st);
+      b = fj_byte(st);
+      if (b == '{' || b == '[') {
+        VALUE c = (b == '{') ? rb_hash_new() : rb_ary_new();
+        fj_advance(st, 1); /* consume the opening '{' or '[' */
+        fj_store_member(st, cur, key, c);
+        rb_ary_push(stack, c);
+        cur = c;
+        cur_obj = (b == '{');
+        continue;
+      }
+      if (b == -1) fj_error(st, "unexpected end of input");
+      fj_store_member(st, cur, key, fj_parse_member_value(st));
+      fj_skip_ws_comments(st); /* skip_separator_run */
+      if (fj_byte(st) == ',') fj_advance(st, 1);
+    } else { /* array */
+      fj_skip_ws_comments(st);
+      b = fj_byte(st);
+      if (b == ']') {
+        fj_advance(st, 1);
+        rb_ary_pop(stack);
+        if (RARRAY_LEN(stack) == 0) return root;
+        cur = rb_ary_entry(stack, RARRAY_LEN(stack) - 1);
+        cur_obj = RB_TYPE_P(cur, T_HASH);
+        fj_skip_ws_comments(st);
+        if (fj_byte(st) == ',') fj_advance(st, 1);
+        continue;
+      }
+      if (b == -1) fj_error(st, "unterminated array");
+      if (b == '}') fj_error(st, "unexpected '}' — expected ']' or a value");
+      if (b == '{' || b == '[') {
+        VALUE c = (b == '{') ? rb_hash_new() : rb_ary_new();
+        fj_advance(st, 1); /* consume the opening '{' or '[' */
+        rb_ary_push(cur, c);
+        rb_ary_push(stack, c);
+        cur = c;
+        cur_obj = (b == '{');
+        continue;
+      }
+      rb_ary_push(cur, fj_parse_member_value(st));
+      fj_skip_ws_comments(st); /* skip_separator_run */
+      if (fj_byte(st) == ',') fj_advance(st, 1);
+    }
+  }
+}
+
 /* At the start of a document: identifier followed by ':' means implicit root
  * object (no outer braces). Look ahead without consuming. */
 static int fj_implicit_root_ahead(fj_state *st) {
@@ -809,7 +904,7 @@ static int fj_implicit_root_ahead(fj_state *st) {
 
 static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
   fj_state st;
-  VALUE value, enc_opt, md, dk;
+  VALUE value, enc_opt, dk;
 
   Check_Type(input, T_STRING);
 
@@ -831,8 +926,6 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
   st.enc = rb_enc_get(input);
   st.depth = 0;
 
-  md = rb_hash_aref(opts, ID2SYM(rb_intern("max_depth")));
-  st.max_depth = NIL_P(md) ? 512 : NUM2INT(md);
   st.symbolize_keys = RTEST(rb_hash_aref(opts, ID2SYM(rb_intern("symbolize_keys"))));
   dk = rb_hash_aref(opts, ID2SYM(rb_intern("duplicate_key")));
   st.dup_first_wins = (dk == ID2SYM(rb_intern("first_wins")));
@@ -852,10 +945,10 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
 
   fj_skip_ws_comments(&st);
   if (fj_eof(&st)) fj_error(&st, "unexpected end of input");
-  value = fj_implicit_root_ahead(&st) ? fj_parse_members(&st, 1) : fj_parse_value(&st);
+  value = fj_parse_iter(&st, fj_implicit_root_ahead(&st));
   fj_skip_ws_comments(&st);
   if (!fj_eof(&st)) {
-    fj_error(&st, "unexpected content after top-level value — to parse multiple documents, use FlexJSON.parse_many");
+    fj_error(&st, "unexpected content after top-level value — pass a block to FlexJSON.parse to read multiple documents");
   }
   return value;
 }
@@ -864,5 +957,6 @@ void Init_flex_json(void) {
   mFlexJSON = rb_define_module("FlexJSON");
   cParseError = rb_const_get(mFlexJSON, rb_intern("ParseError"));
   cEncodingError = rb_const_get(mFlexJSON, rb_intern("EncodingError"));
+  fj_bigdecimal_id = rb_intern("BigDecimal");
   rb_define_module_function(mFlexJSON, "parse_c", fj_parse_c, 2);
 }

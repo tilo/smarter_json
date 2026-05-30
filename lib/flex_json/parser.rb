@@ -16,22 +16,23 @@ module FlexJSON
   module_function
 
   # One options hash; the values given override Parser::DEFAULT_OPTIONS.
-  # :acceleration (default true) selects the C extension when it is compiled and
-  # loaded (FlexJSON::HAS_ACCELERATION); otherwise the pure-Ruby parser.
-  def parse(input, options = {})
-    if options.fetch(:acceleration, true) && HAS_ACCELERATION
+  #
+  # Without a block: parses exactly one top-level value and raises if any
+  # non-whitespace content follows it (no silent data loss). :acceleration
+  # (default true) selects the C extension when compiled and loaded
+  # (FlexJSON::HAS_ACCELERATION); otherwise the pure-Ruby parser.
+  #
+  # With a block: yields each top-level value — JSONL / NDJSON, concatenated
+  # JSON, or whitespace-separated values — and returns nil. The block form is
+  # always pure-Ruby (the C extension parses a single document).
+  def parse(input, options = {}, &block)
+    if block
+      Parser.new(input, options).each_value(&block)
+    elsif options.fetch(:acceleration, true) && HAS_ACCELERATION
       parse_c(input, options)
     else
       Parser.new(input, options).parse
     end
-  end
-
-  # Returns an Array of every top-level value in the input.
-  # Handles JSONL / NDJSON, concatenated JSON, and "misplaced value"
-  # input without dropping anything. (C acceleration for multi-document
-  # input is a later increment; this always uses the pure-Ruby parser.)
-  def parse_many(input, options = {})
-    Parser.new(input, options).parse_all
   end
 
   # The :encoding option labels the input's encoding (default "UTF-8").
@@ -95,6 +96,10 @@ module FlexJSON
     NOT_NUMERIC = Object.new
     HEX_RE      = /\A[-+]?0[xX][0-9a-fA-F_]+\z/.freeze
     DEC_RE      = /\A[-+]?(?:0|[1-9][0-9_]*)?(?:\.[0-9_]*)?(?:[eE][-+]?[0-9_]+)?\z/.freeze
+    # A decimal BigDecimal() would reject as-is: a leading dot (".5") or a dot not
+    # followed by a digit ("5.", "5.e3"). Matches iff normalize_for_bigdecimal
+    # would change the string — so when it doesn't match, we skip normalization.
+    NEEDS_DECIMAL_FIXUP = /\A[+-]?\.|\.(?:[eE]|\z)/.freeze
     BLANK_HEAD  = /\A[[:space:]]+/.freeze
     BLANK_TAIL  = /[[:space:]]+\z/.freeze
 
@@ -104,7 +109,6 @@ module FlexJSON
       encoding: nil, # label the input's encoding (no transcoding)
       symbolize_keys: false, # Symbol keys instead of String
       duplicate_key: :last_wins, # :last_wins | :first_wins | :raise
-      max_depth: 512, # guard against pathological nesting
       bigdecimal_load: :auto, # :auto | :float | :bigdecimal (Oj-compatible)
     }.freeze
 
@@ -114,7 +118,6 @@ module FlexJSON
       opts = DEFAULT_OPTIONS.merge(options)
       @symbolize_keys  = opts[:symbolize_keys]
       @duplicate_key   = opts[:duplicate_key]
-      @max_depth       = opts[:max_depth]
       @bigdecimal_load = opts[:bigdecimal_load]
 
       encoding = opts[:encoding]
@@ -126,7 +129,6 @@ module FlexJSON
       @pos = @input.getbyte(0) == 0xEF && @input.getbyte(1) == 0xBB && @input.getbyte(2) == 0xBF ? 3 : 0
       @line = 1
       @col = 1
-      @depth = 0
     end
 
     def parse
@@ -136,22 +138,22 @@ module FlexJSON
       value = parse_document
       skip_whitespace_and_comments
       unless eof?
-        raise error("unexpected content after top-level value — to parse multiple documents, use FlexJSON.parse_many")
+        raise error("unexpected content after top-level value — pass a block to FlexJSON.parse to read multiple documents")
       end
 
       value
     end
 
-    # Parse every top-level value until EOF. Used by FlexJSON.parse_many.
-    def parse_all
-      values = []
+    # Yield each top-level value until EOF (JSONL / NDJSON / concatenated /
+    # whitespace-separated). Used by the block form of FlexJSON.parse.
+    def each_value
       loop do
         skip_whitespace_and_comments
         break if eof?
 
-        values << parse_document
+        yield parse_document
       end
-      values
+      nil
     end
 
     private
@@ -159,10 +161,113 @@ module FlexJSON
     # --- top-level dispatch ---
 
     def parse_document
-      if implicit_root_object_ahead?
-        parse_members(implicit: true)
-      else
-        parse_value
+      parse_iter(implicit_root_object_ahead?)
+    end
+
+    # Iterative container parser — explicit stack, NO Ruby recursion, so nesting
+    # is bounded only by memory (like Oj and the C extension's fj_parse_iter),
+    # never by the call stack. Mirrors the C driver to keep the two paths in
+    # parity.
+    def parse_iter(implicit_root)
+      stack = []
+      root = nil
+      cur = nil
+      cur_obj = false
+      at_top = true
+
+      if implicit_root
+        root = {}
+        stack.push(root)
+        cur = root
+        cur_obj = true
+        at_top = false
+      end
+
+      loop do
+        skip_whitespace_and_comments
+        b = byte
+        if at_top
+          if b == LBRACE
+            advance(1)
+            root = {}
+            stack.push(root)
+            cur = root
+            cur_obj = true
+            at_top = false
+          elsif b == LBRACKET
+            advance(1)
+            root = []
+            stack.push(root)
+            cur = root
+            cur_obj = false
+            at_top = false
+          elsif b.nil?
+            raise error("unexpected end of input")
+          else
+            return parse_value
+          end
+        elsif cur_obj
+          if b == RBRACE
+            advance(1)
+            stack.pop
+            return root if stack.empty?
+
+            cur = stack.last
+            cur_obj = cur.is_a?(Hash)
+            skip_separator_run
+          elsif b.nil?
+            return root if implicit_root && stack.size == 1
+
+            raise error("unterminated object")
+          elsif b == RBRACKET
+            raise error("unexpected ']' — expected a key or '}'")
+          else
+            key = parse_object_key
+            skip_whitespace_and_comments
+            raise error("expected ':' after key #{key.inspect}") unless byte == COLON
+
+            advance(1)
+            skip_whitespace_and_comments
+            b = byte
+            if [LBRACE, LBRACKET].include?(b)
+              child = b == LBRACE ? {} : []
+              advance(1) # consume { or [
+              store_member(cur, key, child)
+              stack.push(child)
+              cur = child
+              cur_obj = (b == LBRACE)
+            elsif b.nil?
+              raise error("unexpected end of input")
+            else
+              store_member(cur, key, parse_member_value)
+              skip_separator_run
+            end
+          end
+        else # array
+          if b == RBRACKET
+            advance(1)
+            stack.pop
+            return root if stack.empty?
+
+            cur = stack.last
+            cur_obj = cur.is_a?(Hash)
+            skip_separator_run
+          elsif b.nil?
+            raise error("unterminated array")
+          elsif b == RBRACE
+            raise error("unexpected '}' — expected ']' or a value")
+          elsif [LBRACE, LBRACKET].include?(b)
+            child = b == LBRACE ? {} : []
+            advance(1) # consume { or [
+            cur.push(child)
+            stack.push(child)
+            cur = child
+            cur_obj = (b == LBRACE)
+          else
+            cur.push(parse_member_value)
+            skip_separator_run
+          end
+        end
       end
     end
 
@@ -333,8 +438,6 @@ module FlexJSON
 
       b = byte
       case b
-      when LBRACE   then parse_object
-      when LBRACKET then parse_array
       when DQUOTE   then parse_string(DQUOTE)
       when SQUOTE   then parse_single_or_triple
       when MINUS, PLUS, DOT, ZERO..NINE, UPPER_I then parse_number
@@ -369,8 +472,6 @@ module FlexJSON
 
       b = byte
       case b
-      when LBRACE   then parse_object
-      when LBRACKET then parse_array
       when DQUOTE   then parse_string(DQUOTE)
       when SQUOTE   then parse_single_or_triple
       else
@@ -406,44 +507,6 @@ module FlexJSON
         advance(1)
       end
       raise error("unterminated smart-quoted string")
-    end
-
-    def parse_object
-      @depth += 1
-      raise error("maximum nesting depth (#{@max_depth}) exceeded") if @depth > @max_depth
-
-      advance(1) # consume {
-      result = parse_members(implicit: false)
-      @depth -= 1
-      result
-    end
-
-    def parse_members(implicit:)
-      result = {}
-      loop do
-        skip_whitespace_and_comments
-        if byte == RBRACE
-          raise error("unexpected '}'") if implicit
-
-          advance(1)
-          return result
-        end
-        if eof?
-          return result if implicit
-
-          raise error("unterminated object")
-        end
-        raise error("unexpected ']' — expected a key or '}'") if byte == RBRACKET
-
-        key = parse_object_key
-        skip_whitespace_and_comments
-        raise error("expected ':' after key #{key.inspect}") unless byte == COLON
-
-        advance(1)
-        value = parse_member_value
-        store_member(result, key, value)
-        skip_separator_run
-      end
     end
 
     def store_member(hash, key, value)
@@ -484,32 +547,17 @@ module FlexJSON
       @input.byteslice(start, @pos - start).force_encoding(@input.encoding)
     end
 
-    def parse_array
-      @depth += 1
-      raise error("maximum nesting depth (#{@max_depth}) exceeded") if @depth > @max_depth
-
-      advance(1) # consume [
-      result = []
-      loop do
-        skip_whitespace_and_comments
-        if byte == RBRACKET
-          advance(1)
-          @depth -= 1
-          return result
-        end
-        raise error("unterminated array") if eof?
-        raise error("unexpected '}' — expected ']' or a value") if byte == RBRACE
-
-        result << parse_member_value
-        skip_separator_run
-      end
-    end
-
     # --- quoteless strings & literal classification ---
 
     def parse_quoteless_or_literal
       start = @pos
       scan_quoteless_run
+      # A quoteless run must consume at least one byte. If the first byte is a
+      # delimiter (',' '}' ']'), the run is empty and @pos didn't move — returning
+      # here would make the caller's `result << parse_member_value` loop forever.
+      # Raise instead (correct today: the Lenient Commas Option is not adopted).
+      raise error("expected a value") if @pos == start
+
       raw = @input.byteslice(start, @pos - start).force_encoding(@input.encoding)
       classify_quoteless(trim_blank(raw))
     end
@@ -587,7 +635,12 @@ module FlexJSON
     end
 
     def to_big_decimal(body)
-      BigDecimal(normalize_for_bigdecimal(body))
+      # Fast path (mirrors the C extension): a clean token goes straight to
+      # BigDecimal(); only a bare/trailing dot needs the normalizing rewrite,
+      # which BigDecimal() would otherwise reject. (body has no underscores here
+      # — numeric_value already stripped them.)
+      body = normalize_for_bigdecimal(body) if NEEDS_DECIMAL_FIXUP.match?(body)
+      BigDecimal(body)
     rescue ArgumentError
       body.to_f
     end

@@ -20,7 +20,7 @@ module FlexJSON
 
   HAS_ACCELERATION = respond_to?(:parse_c)
 
-  # parse_c is internal — the public API is parse / parse_many / parse_file.
+  # parse_c is internal — the public API is parse / parse_file.
   # (rb_funcall from C and the internal `parse` dispatch still reach it.)
   private_class_method :parse_c if HAS_ACCELERATION
 end
