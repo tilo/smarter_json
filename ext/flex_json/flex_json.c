@@ -385,7 +385,7 @@ static long fj_sig_digits(const char *p, long n) {
 static int fj_decimal_is_clean(const char *p, long n) {
   long i = 0;
   if (memchr(p, '_', (size_t)n) != NULL) return 0;
-  if (i < n && (p[i] == '+' || p[i] == '-')) i++;
+  if (i < n && (p[i] == '-' || p[i] == '+')) i++;
   if (i < n && p[i] == '.') return 0;
   for (; i < n; i++) {
     if (p[i] == '.') {
@@ -414,7 +414,7 @@ static VALUE fj_to_bigdecimal_token(const char *p, long n) {
   }
 
   buf = (n + 2 <= (long)sizeof(stack)) ? stack : ruby_xmalloc((size_t)(n + 2));
-  if (i < n && (p[i] == '+' || p[i] == '-')) buf[w++] = p[i++];
+  if (i < n && (p[i] == '-' || p[i] == '+')) buf[w++] = p[i++];
   if (i < n && p[i] == '.') buf[w++] = '0';                    /* ".5" -> "0.5" */
   for (; i < n; i++) {
     if (p[i] == '_') continue;
@@ -473,7 +473,7 @@ static int fj_try_decimal(fj_state *st, const char *p, long n, VALUE *out) {
   int  m10digits = 0, frac = 0;
   int64_t e10 = 0;
 
-  if (i < n && (p[i] == '+' || p[i] == '-')) { neg = (p[i] == '-'); i++; }
+  if (i < n && (p[i] == '-' || p[i] == '+')) { neg = (p[i] == '-'); i++; }
 
   /* Integer part: a single '0', or [1-9] then digits/underscores. */
   if (i < n && p[i] == '0') {
@@ -511,7 +511,7 @@ static int fj_try_decimal(fj_state *st, const char *p, long n, VALUE *out) {
     long es;
     int eneg = 0;
     is_float = 1; i++;
-    if (i < n && (p[i] == '+' || p[i] == '-')) { eneg = (p[i] == '-'); i++; }
+    if (i < n && (p[i] == '-' || p[i] == '+')) { eneg = (p[i] == '-'); i++; }
     es = i;
     while (i < n && ((p[i] >= '0' && p[i] <= '9') || p[i] == '_')) {
       if (p[i] != '_' && !overflow) {
@@ -623,7 +623,7 @@ static VALUE fj_parse_number(fj_state *st) {
     int eneg = 0;
     is_float = 1;
     p++;
-    if (*p == '+' || *p == '-') { eneg = (*p == '-'); p++; }
+    if (*p == '-' || *p == '+') { eneg = (*p == '-'); p++; }
     if (!(*p >= '0' && *p <= '9')) { st->pos = p - buf; fj_error(st, "invalid number: expected digits in exponent"); }
     while ((*p >= '0' && *p <= '9') || *p == '_') {
       if (*p != '_' && !overflow) {
@@ -738,7 +738,7 @@ static int fj_tok_eq(const char *p, long n, const char *word) {
 
 static int fj_is_hex_token(const char *p, long n) {
   long i = 0, hs;
-  if (i < n && (p[i] == '+' || p[i] == '-')) i++;
+  if (i < n && (p[i] == '-' || p[i] == '+')) i++;
   if (i + 1 < n && p[i] == '0' && (p[i + 1] == 'x' || p[i + 1] == 'X')) i += 2; else return 0;
   hs = i;
   while (i < n && (fj_hex_val((unsigned char)p[i]) >= 0 || p[i] == '_')) i++;
@@ -776,14 +776,14 @@ static VALUE fj_classify_quoteless(fj_state *st, const char *p0, long n0) {
    * through to the literal checks. */
   c0 = (n > 0) ? (unsigned char)p[0] : 0;
 
-  if ((c0 >= '0' && c0 <= '9') || c0 == '.' || c0 == '+' || c0 == '-') {
+  if ((c0 >= '0' && c0 <= '9') || c0 == '.' || c0 == '-' || c0 == '+') {
     if (c0 == '+' && fj_tok_eq(p, n, "+Infinity")) return rb_float_new(INFINITY);
     if (c0 == '-' && fj_tok_eq(p, n, "-Infinity")) return rb_float_new(-INFINITY);
     if (fj_is_hex_token(p, n)) {
       long i = 0;
       int neg = 0;
       VALUE hx;
-      if (p[i] == '+' || p[i] == '-') { neg = (p[i] == '-'); i++; }
+      if (p[i] == '-' || p[i] == '+') { neg = (p[i] == '-'); i++; }
       i += 2; /* skip 0x */
       hx = rb_str_buf_new(n);
       if (neg) rb_str_buf_cat(hx, "-", 1);
@@ -808,23 +808,44 @@ static VALUE fj_classify_quoteless(fj_state *st, const char *p0, long n0) {
 
 /* Quoteless single-line string: scan to a delimiter (structural punctuation,
  * newline, EOF, or a whitespace-preceded comment marker), then classify. */
+/* Per-byte classes for the quoteless-token boundary scan. ASCII only; bytes
+ * >= 0x80 are handled separately (possible multibyte whitespace). LF/CR are
+ * TERM, not WS — they end the token, matching the old terminator check that ran
+ * before the whitespace check. */
+enum { FJ_QL_ORD = 0, FJ_QL_TERM, FJ_QL_WS, FJ_QL_CMT };
+static const unsigned char fj_ql_class[256] = {
+  [','] = FJ_QL_TERM, ['}'] = FJ_QL_TERM, [']'] = FJ_QL_TERM,
+  [0x0A] = FJ_QL_TERM, [0x0D] = FJ_QL_TERM,
+  [0x09] = FJ_QL_WS, [0x0B] = FJ_QL_WS, [0x0C] = FJ_QL_WS, [' '] = FJ_QL_WS,
+  ['#'] = FJ_QL_CMT, ['/'] = FJ_QL_CMT,
+};
+
 static VALUE fj_parse_quoteless_or_literal(fj_state *st) {
   long start = st->pos;
   int prev_ws = 0, b, nx;
   for (;;) {
     b = fj_byte(st);
     if (b == -1) break;
-    if (b == ',' || b == '}' || b == ']' || b == 0x0A || b == 0x0D) break;
-    nx = fj_byte_at(st, 1);
-    if (prev_ws && (b == '#' || (b == '/' && (nx == '/' || nx == '*')))) break;
-    if (fj_is_ws(b)) {
-      prev_ws = 1;
-      fj_advance(st, 1);
-    } else if (b >= 0x80) {
+    if (b >= 0x80) {  /* possible multibyte whitespace */
       long m = fj_mbws(st->buf + st->pos, st->len - st->pos);
       if (m > 0) { prev_ws = 1; st->pos += m; }
       else { prev_ws = 0; fj_advance(st, 1); }
-    } else {
+      continue;
+    }
+    /* One table lookup classifies the byte; the common ordinary byte takes the
+     * fast path with no further comparisons and no lookahead read. */
+    {
+      unsigned char cls = fj_ql_class[b];
+      if (FJ_LIKELY(cls == FJ_QL_ORD)) { prev_ws = 0; fj_advance(st, 1); continue; }
+      if (cls == FJ_QL_TERM) break;
+      if (cls == FJ_QL_WS) { prev_ws = 1; fj_advance(st, 1); continue; }
+      /* FJ_QL_CMT: '#' or '/' — a comment marker only when preceded by whitespace.
+       * The lookahead byte (nx) is read only here, not on every byte. */
+      if (prev_ws) {
+        if (b == '#') break;
+        nx = fj_byte_at(st, 1);
+        if (nx == '/' || nx == '*') break;  /* b == '/' */
+      }
       prev_ws = 0;
       fj_advance(st, 1);
     }
@@ -1005,7 +1026,7 @@ static int fj_try_member_number(fj_state *st, VALUE *out) {
     const char *es;
     int eneg = 0;
     is_float = 1; p++;
-    if (*p == '+' || *p == '-') { eneg = (*p == '-'); p++; }
+    if (*p == '-' || *p == '+') { eneg = (*p == '-'); p++; }
     es = p;
     while ((*p >= '0' && *p <= '9') || *p == '_') {
       if (*p != '_' && !overflow) { e10 = e10 * 10 + (*p - '0'); if (e10 > 1000000) overflow = 1; }

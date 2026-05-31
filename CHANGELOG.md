@@ -1,33 +1,29 @@
 
 # FlexJSON Change Log
 
+## 0.3.8 (2026-05-30 unreleased)
+- Reordered single-character checks so the more common byte is tested first (`-` before `+`).
+- Quoteless-token boundary scan now uses a 256-byte class table: ordinary bytes are classified in one table lookup, and the lookahead byte is read only at a `#`/`/` instead of on every byte. Speeds up quoteless / config-style input (the lenient case the JSON benchmarks don't exercise).
+
 ## 0.3.7 (2026-05-30 unreleased)
-- more performance improvements
+- Escaped-string literal runs are bulk-copied with the NEON scanner instead of one byte at a time.
+- Added branch hints (`__builtin_expect`) and prefetch to the hot string-scan loop. Sped up string-heavy files (string_array, github_events, twitter all 12–16% faster).
 
 ## 0.3.6 (2026-05-30 unreleased)
-- more performance improvements
+- Fast path for plain numbers inside objects/arrays (`fj_try_member_number`): one scan straight from the cursor, committing when the number meets a delimiter and falling back to the quoteless scanner otherwise. Skips the quoteless boundary scan + classify dispatch for the common case. Broad gains on number-in-container files (weather, canada, usgs, big_decimals).
 
 ## 0.3.5 (2026-05-30 unreleased)
-- more performance improvements
-
-  - Added fj_try_decimal — scans the already-bounded token once, validating and accumulating mantissa/exponent in the same pass, then builds the value via the shared
-  fj_int_from_parts / fj_float_from_parts helpers. Returns 0 (→ keep as string) when it isn't a valid number.
-  - Collapsed 3+ passes into 1 on this path: the old fj_validate_decimal (validate) + fj_sig_digits (significant-digit count) + fj_decimal_value (mantissa extraction) are now one
-  scan. The m10digits <= 16 shortcut skips the fj_sig_digits scan entirely for the common case (every canada coordinate).
-  - #2 / #3 applied here too: fast digit loop with no per-byte _ check (slow step only on an actual underscore); bounds via the slice length, same as before but now traversed once.
-  - Removed the now-dead fj_validate_decimal, fj_int_value, fj_decimal_value — fj_parse_number (strict path) and fj_try_decimal (quoteless path) both go straight through the shared
-  …_from_parts helpers, so the two paths can't drift.
-
+- Rewrote `fj_parse_number` (top-level numbers) as a single pass: finds the token end and accumulates the mantissa/exponent at once, using the string's NUL terminator as a scan sentinel (no per-byte bounds check) and a digit loop that skips the underscore check until an underscore actually appears.
+- Added `fj_try_decimal` for the quoteless path: validates and extracts the number in one scan, replacing the old three scans (validate + significant-digit count + mantissa extraction); skips the significant-digit scan when the number has ≤16 digits.
+- Both number paths now build values through the shared `fj_int_from_parts` / `fj_float_from_parts` helpers so they can't drift; removed the now-dead `fj_validate_decimal` / `fj_int_value` / `fj_decimal_value`.
 
 ## 0.3.4 (2026-05-30 unreleased)
-- performance improvements
-
-   - Dropped the per-member key? rb_funcall (json_learnings #1) — the easy one. flex_json does a Ruby method dispatch per object member under the default :last_wins for nothing. twitter/github/citm pay it millions of times. A few lines, low risk.
-   - C-array value stack + pre-sized hash + rb_hash_bulk_insert + size-based dup detection (json #2/#3, oj #2) — the real object-path push.
-   - Local key cache before rb_enc_interned_str (json #4, oj #1) — repeated keys.
+- Dropped a per-member Ruby method call (`key?`) that fired for every object member under the default duplicate-key mode — pure waste on object-heavy files (twitter, github_events, citm).
+- Build objects and arrays from a C value stack with a pre-sized hash + bulk insert (and size-based duplicate detection), instead of inserting one member/element at a time.
+- Added a per-parse key cache so repeated object keys are interned once instead of every occurrence.
 
 ## 0.3.3 (2026-05-30 unreleased)
-- adding Ryu for floating piont performance
+- Vendored Ryū (Ulf Adams, Apache-2.0) for correctly-rounded string→double conversion: the mantissa is accumulated in one pass and converted with no `strtod`. Large win on float-heavy files (canada, big_decimals).
 
 ## 0.3.3 (2026-05-29 unreleased)
 - performance fixes
@@ -45,7 +41,7 @@
 - recursive parser
 
 ## 0.1.1 (2026-05-29 unreleased)
-- MVP complete (Ruby + C)
+- MVP complete
 
 ## 0.1.0 (2026-05-28 unreleased)
 - Initial Ruby version
