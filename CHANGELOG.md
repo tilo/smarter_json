@@ -1,6 +1,13 @@
 
 # FlexJSON Change Log
 
+## 0.3.9 (2026-05-31 unreleased)
+- `parse` (no block) now handles any input automatically: 0 documents (empty / whitespace / comment-only) → `nil`, 1 document → the value itself, 2+ documents (NDJSON / JSONL / concatenated / whitespace-separated) → an Array of the values. It no longer raises on trailing content.
+- Detection is free (the same trailing-content check that used to raise) and the single-document path allocates no Array, so single-value parsing is unchanged in speed.
+- The block form (`parse(input) { |doc| … }`) is kept as the bounded-memory streaming path. `parse_file(path) { |doc| … }` now forwards the block too, so files stream the same way (previously the block was silently ignored). Bracketless comma lists (`1, 2, 3`) still raise — commas don't separate top-level documents (implicit-root array remains unsupported).
+- The block form allows individual processing of each line in NDJSON files.
+- Supersedes the earlier "raise on trailing content, match Oj" behavior.
+
 ## 0.3.8 (2026-05-30 unreleased)
 - Reordered single-character checks so the more common byte is tested first (`-` before `+`).
 - Quoteless-token boundary scan now uses a 256-byte class table: ordinary bytes are classified in one table lookup, and the lookahead byte is read only at a `#`/`/` instead of on every byte. Speeds up quoteless / config-style input (the lenient case the JSON benchmarks don't exercise).

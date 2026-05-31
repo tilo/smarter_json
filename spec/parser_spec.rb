@@ -673,16 +673,16 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect { FlexJSON.parse('{"a": 1]', acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
         end
 
-        it "raises on empty input" do
-          expect { FlexJSON.parse("", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
+        it "returns nil for empty input (zero documents)" do
+          expect(FlexJSON.parse("", acceleration: acceleration)).to be_nil
         end
 
-        it "raises on whitespace-only input" do
-          expect { FlexJSON.parse("    ", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
+        it "returns nil for whitespace-only input (zero documents)" do
+          expect(FlexJSON.parse("    ", acceleration: acceleration)).to be_nil
         end
 
-        it "raises on comment-only input (no value)" do
-          expect { FlexJSON.parse("// just a comment\n", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
+        it "returns nil for comment-only input (zero documents)" do
+          expect(FlexJSON.parse("// just a comment\n", acceleration: acceleration)).to be_nil
         end
 
         it "raises FlexJSON::ParseError on bad escape sequence" do
@@ -779,6 +779,77 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       end
 
       # ============================================================
+      # parse without a block — auto: nil / single value / Array of documents
+      # (no option, no flag; the count is detected for free)
+      # ============================================================
+
+      describe "block form streams each document (.parse and .parse_file)" do
+        it ".parse yields each top-level document and returns nil" do
+          out = []
+          rv = FlexJSON.parse(%({"id":1}\n{"id":2}\n{"id":3}), acceleration: acceleration) { |v| out << v }
+          expect(out).to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
+          expect(rv).to be_nil
+        end
+
+        it ".parse_file yields each top-level document and returns nil" do
+          out = []
+          rv = FlexJSON.parse_file(File.join(fixtures_dir, "multi_doc.ndjson"), acceleration: acceleration) { |v| out << v }
+          expect(out).to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
+          expect(rv).to be_nil
+        end
+
+        it ".parse_file without a block returns an Array of the documents" do
+          expect(FlexJSON.parse_file(File.join(fixtures_dir, "multi_doc.ndjson"), acceleration: acceleration)).to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
+        end
+      end
+
+      describe "parse without a block (auto nil / value / Array)" do
+        it "returns nil for empty input (zero documents)" do
+          expect(FlexJSON.parse("", acceleration: acceleration)).to be_nil
+        end
+
+        it "returns the value itself for a single document" do
+          expect(FlexJSON.parse('{"a": 1}', acceleration: acceleration)).to eq({ "a" => 1 })
+        end
+
+        it "returns a bare scalar as itself (single document)" do
+          expect(FlexJSON.parse("42", acceleration: acceleration)).to eq(42)
+        end
+
+        it "returns a single top-level array as that array (one document, not flattened)" do
+          expect(FlexJSON.parse("[1, 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
+        end
+
+        it "returns an Array of documents for newline-delimited JSON (NDJSON / JSONL)" do
+          input = %({"event": 1}\n{"event": 2}\n{"event": 3}\n)
+          expect(FlexJSON.parse(input, acceleration: acceleration)).to eq([{ "event" => 1 }, { "event" => 2 }, { "event" => 3 }])
+        end
+
+        it "returns an Array for concatenated objects with no separator" do
+          expect(FlexJSON.parse('{"a":1}{"b":2}', acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
+        end
+
+        it "returns an Array for space-separated top-level values of mixed types" do
+          expect(FlexJSON.parse('42 "x" true', acceleration: acceleration)).to eq([42, "x", true])
+        end
+
+        it "returns an Array of arrays for newline-separated top-level arrays" do
+          expect(FlexJSON.parse("[1,2]\n[3,4]", acceleration: acceleration)).to eq([[1, 2], [3, 4]])
+        end
+
+        # Implicit-root ARRAY stays unsupported: commas do NOT separate top-level
+        # documents (only whitespace / newline / concatenation do), so a bracketless
+        # comma list is still an unexpected character after the first value.
+        it "still raises on a bracketless comma-separated top-level list (implicit array unsupported)" do
+          expect { FlexJSON.parse("1, 2, 3", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
+        end
+
+        it "still raises on bracketless comma-separated bare words" do
+          expect { FlexJSON.parse("red, green, blue", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
+        end
+      end
+
+      # ============================================================
       # Fixture-based integration tests
       # ============================================================
 
@@ -858,12 +929,12 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect(result).to eq({ "" => "empty" })
         end
 
-        it "raises on json_fail10.json trailing content (no silent data loss)" do
+        it "parses json_fail10.json (object + trailing value) as two documents → Array" do
           input = File.read(File.join(fixtures_dir, "json_fail10.json"))
-          # §3 row 21: `parse` returns exactly one value and raises if anything
-          # follows it. The trailing "misplaced quoted value" must not be silently dropped.
-          # The message points the caller at the block form.
-          expect { FlexJSON.parse(input, acceleration: acceleration) }.to raise_error(FlexJSON::ParseError, /block/)
+          # flex_json is lenient: two valid top-level values (an object, then a
+          # string) parse as a 2-element Array with no block needed — no data is
+          # dropped. (Strict JSON rejects this; flex_json does not.)
+          expect(FlexJSON.parse(input, acceleration: acceleration)).to eq([{ "Extra value after close" => true }, "misplaced quoted value"])
         end
 
         it "recovers both values from json_fail10.json via the block form" do

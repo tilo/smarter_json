@@ -42,10 +42,10 @@ module FlexJSON
   # The :encoding option labels the input's encoding (default "UTF-8").
   # It does NOT trigger a transcoding pass — the parser works on bytes in
   # their native encoding and emits string values with the same tag.
-  def parse_file(path, options = {})
+  def parse_file(path, options = {}, &block)
     encoding = options.fetch(:encoding, "UTF-8")
     input = File.read(path, encoding: encoding)
-    parse(input, options)
+    parse(input, options, &block)
   end
 
   # Hand-rolled FSM single-pass parser.
@@ -135,17 +135,26 @@ module FlexJSON
       @col = 1
     end
 
+    # No block: auto-detect the document count for free (the same "is there
+    # trailing content?" check that used to raise). 0 documents -> nil; 1 document
+    # -> the value itself (single-document path, no Array allocated); 2+ documents
+    # (NDJSON / JSONL / concatenated / whitespace-separated) -> an Array of every
+    # value. Commas do NOT separate documents (only whitespace / newline /
+    # concatenation do), so a bracketless comma list still raises in parse_document.
     def parse
       skip_whitespace_and_comments
-      raise error("unexpected end of input") if eof?
+      return nil if eof?
 
       value = parse_document
       skip_whitespace_and_comments
-      unless eof?
-        raise error("unexpected content after top-level value — pass a block to FlexJSON.parse to read multiple documents")
-      end
+      return value if eof?
 
-      value
+      results = [value]
+      until eof?
+        results << parse_document
+        skip_whitespace_and_comments
+      end
+      results
     end
 
     # Yield each top-level value until EOF (JSONL / NDJSON / concatenated /

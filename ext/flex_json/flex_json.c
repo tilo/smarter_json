@@ -1376,14 +1376,27 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
     return Qnil;
   }
 
+  /* No block: auto-detect the document count for free — it is the same "is there
+   * trailing content after the first value?" check that used to raise. 0 documents
+   * -> nil; 1 document -> the value itself (single-document hot path, no Array
+   * allocated); 2+ documents (NDJSON / JSONL / concatenated / whitespace-separated)
+   * -> an Array of every top-level value. Commas do NOT separate documents (only
+   * whitespace / newline / concatenation do), so a bracketless comma list still
+   * raises in fj_parse_iter — the unsupported implicit-root array. */
   fj_skip_ws_comments(&st);
-  if (fj_eof(&st)) fj_error(&st, "unexpected end of input");
+  if (fj_eof(&st)) return Qnil;
   value = fj_parse_iter(&st, fj_implicit_root_ahead(&st));
   fj_skip_ws_comments(&st);
-  if (!fj_eof(&st)) {
-    fj_error(&st, "unexpected content after top-level value — pass a block to FlexJSON.parse to read multiple documents");
+  if (fj_eof(&st)) return value;
+  {
+    VALUE arr = rb_ary_new();
+    rb_ary_push(arr, value);
+    do {
+      rb_ary_push(arr, fj_parse_iter(&st, fj_implicit_root_ahead(&st)));
+      fj_skip_ws_comments(&st);
+    } while (!fj_eof(&st));
+    return arr;
   }
-  return value;
 }
 
 void Init_flex_json(void) {
