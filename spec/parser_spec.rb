@@ -963,6 +963,43 @@ second"', acceleration: acceleration)).to eq("firstsecond")
             expect(result).to eq(BigDecimal("5"))
           end
         end
+
+        describe "Ryū float fallback corners (guards the single-pass number scan)" do
+          # These exercise the paths the Float converter falls back to strtod /
+          # rb_cstr_to_dbl for: >17 mantissa digits, the subnormal range, extreme
+          # exponents, and -0.0. The single-pass rewrite must extract identical
+          # mantissa/exponent parts, so the resulting Float stays bit-identical to
+          # Ruby's own String#to_f.
+
+          it "matches String#to_f for a >17-significant-digit float (strtod fallback)" do
+            s = "1.2345678901234567890" # 20 sig digits — beyond Ryū's 17-digit fast path
+            expect(FlexJSON.parse(s, bigdecimal_load: :float, acceleration: acceleration)).to eql(s.to_f)
+          end
+
+          it "matches String#to_f for a subnormal-range float" do
+            s = "1e-310" # mantissa_digits + exponent < -307 — subnormal fallback
+            expect(FlexJSON.parse(s, acceleration: acceleration)).to eql(s.to_f)
+          end
+
+          it "returns Infinity for an extreme positive exponent" do
+            expect(FlexJSON.parse("1e2000000", acceleration: acceleration)).to eql(Float::INFINITY)
+          end
+
+          it "returns 0.0 for an extreme negative exponent" do
+            expect(FlexJSON.parse("1e-2000000", acceleration: acceleration)).to eql(0.0)
+          end
+
+          it "preserves negative zero (-0.0, distinct from 0.0)" do
+            result = FlexJSON.parse("-0.0", acceleration: acceleration)
+            expect(result).to eql(-0.0)
+            expect(1.0 / result).to eql(-Float::INFINITY) # sign bit preserved
+          end
+
+          it "matches String#to_f for a >17-digit float carrying underscores" do
+            s = "1.234_567_890_123_456_789" # underscores + >17 digits — strip then strtod fallback
+            expect(FlexJSON.parse(s, bigdecimal_load: :float, acceleration: acceleration)).to eql(s.delete("_").to_f)
+          end
+        end
       end
 
       # ============================================================

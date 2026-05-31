@@ -413,136 +413,228 @@ static VALUE fj_to_bigdecimal_token(const char *p, long n) {
   return rb_funcall(rb_cObject, fj_bigdecimal_id, 1, s);
 }
 
-/* Convert an integer token [p, p+n). Fast path: accumulate the digits into a
- * uint64 in one pass (skipping '_') and return directly — no library call, no
- * allocation. Tokens with more than 18 digits (which may exceed int64) fall back
- * to the bignum path (rb_cstr_to_inum / rb_str_to_inum). */
-static VALUE fj_int_value(const char *p, long n) {
-  uint64_t m = 0;
-  int neg = 0, digits = 0;
-  long i = 0;
-
-  if (i < n && (p[i] == '+' || p[i] == '-')) { neg = (p[i] == '-'); i++; }
-  for (; i < n; i++) {
-    if (p[i] == '_') continue;
-    if (++digits > 18) break; /* may exceed int64 — use the bignum path */
-    m = m * 10 + (uint64_t)(p[i] - '0');
-  }
-  if (digits >= 1 && digits <= 18) {
+/* Shared conversion tail: turn the parts extracted during a scan into a Ruby
+ * value. Both fj_parse_number (strict-position scan) and fj_try_decimal
+ * (quoteless path) call these, so the Integer/Float a token produces is identical
+ * no matter which path scanned it. [p, n) is the raw token slice (with any sign),
+ * needed only by the bignum / strtod fallbacks. */
+static VALUE fj_int_from_parts(uint64_t m, int digits, int neg, int overflow, const char *p, long n) {
+  if (!overflow && digits >= 1 && digits <= 18) {
     int64_t v = (int64_t)m;
     return LL2NUM(neg ? -v : v);
   }
+  /* >18 digits (may exceed int64) -> bignum from the slice. */
   if (memchr(p, '_', (size_t)n) == NULL) return rb_cstr_to_inum(p, 10, 0);
   return rb_str_to_inum(fj_strip_underscores(p, n), 10, 0);
 }
 
-/* Convert a decimal token [p, p+n). :bigdecimal (or :auto with >16 significant
- * digits) -> BigDecimal. Otherwise Float: extract the base-10 mantissa and
- * exponent in one pass (skipping '_') and convert with Ryū — correctly rounded,
- * no strtod. Mantissa digits and the e10 = exponent - fractional_digits formula
- * mirror the json gem exactly; >17 mantissa digits or the subnormal range fall
- * back to rb_cstr_to_dbl. */
-static VALUE fj_decimal_value(fj_state *st, const char *p, long n) {
-  uint64_t m10 = 0;
-  int m10digits = 0, neg = 0, frac = 0, in_frac = 0, overflow = 0;
-  int64_t e10 = 0;
-  long i = 0;
-
-  if (st->bigdecimal_load == 2 || (st->bigdecimal_load == 1 && fj_sig_digits(p, n) > 16)) {
-    return fj_to_bigdecimal_token(p, n);
-  }
-
-  if (i < n && (p[i] == '+' || p[i] == '-')) { neg = (p[i] == '-'); i++; }
-  for (; i < n; i++) {
-    char c = p[i];
-    if (c == '_') continue;
-    if (c == '.') { in_frac = 1; continue; }
-    if (c == 'e' || c == 'E') break;
-    if (++m10digits > 18) { overflow = 1; break; } /* keep m10 within uint64 */
-    m10 = m10 * 10 + (uint64_t)(c - '0');
-    if (in_frac) frac++;
-  }
-  if (!overflow && i < n && (p[i] == 'e' || p[i] == 'E')) {
-    int eneg = 0;
-    i++;
-    if (i < n && (p[i] == '+' || p[i] == '-')) { eneg = (p[i] == '-'); i++; }
-    for (; i < n; i++) {
-      if (p[i] == '_') continue;
-      e10 = e10 * 10 + (p[i] - '0');
-      if (e10 > 1000000) { overflow = 1; break; } /* extreme exponent — let strtod handle it */
-    }
-    if (eneg) e10 = -e10;
-  }
-  e10 -= frac;
-
+/* e10 is the final base-10 exponent (already adjusted by the fraction length). */
+static VALUE fj_float_from_parts(uint64_t m10, int m10digits, int64_t e10, int neg, int overflow, const char *p, long n) {
   /* Ryū fast path: <=17 mantissa digits and not in the subnormal range. */
   if (!overflow && m10digits >= 1 && m10digits <= 17 && (long)m10digits + e10 >= -307) {
     if (m10 == 0) return rb_float_new(neg ? -0.0 : 0.0);
     return rb_float_new(ryu_s2d_from_parts(m10, m10digits, (int32_t)e10, neg != 0));
   }
-
   /* Fallback for >17 digits / extreme or subnormal exponents. */
   if (memchr(p, '_', (size_t)n) == NULL) return rb_float_new(rb_cstr_to_dbl(p, 0));
   return rb_float_new(rb_str_to_dbl(fj_strip_underscores(p, n), 0));
 }
 
-/* Top-level / strict-position number (JSON5 grammar). Conversion uses the
- * C API rb_str_to_inum / rb_str_to_dbl — identical to Ruby's to_i/to_f. */
-static VALUE fj_parse_number(fj_state *st) {
-  long start = st->pos; /* includes a leading sign */
-  int b = fj_byte(st);
-  int is_float = 0;
-  int neg_sign = 0;
+/* Scan an already-bounded quoteless token [p, p+n) exactly once: validate it as a
+ * JSON5 decimal *and* extract the mantissa/exponent in the same pass, then build
+ * the value through the shared fj_*_from_parts helpers. Returns 1 (and sets *out)
+ * for a valid number; returns 0 when the token is not a number, so the caller can
+ * keep it as a quoteless string. This replaces the old validate-then-convert
+ * sequence (fj_validate_decimal + fj_decimal_value/fj_int_value), which scanned
+ * the token three-plus times. The accept/reject grammar matches the old
+ * fj_validate_decimal exactly. (+Infinity/-Infinity and hex are handled by the
+ * caller before this point, so they never reach here.) The digit runs skip the
+ * per-byte '_' test, dropping to a slow step only when an underscore appears. */
+static int fj_try_decimal(fj_state *st, const char *p, long n, VALUE *out) {
+  long i = 0;
+  int  is_float = 0, neg = 0, has_digit = 0, overflow = 0;
+  uint64_t m10 = 0;
+  int  m10digits = 0, frac = 0;
+  int64_t e10 = 0;
 
-  if (b == '-' || b == '+') { neg_sign = (b == '-'); fj_advance(st, 1); }
+  if (i < n && (p[i] == '+' || p[i] == '-')) { neg = (p[i] == '-'); i++; }
 
-  b = fj_byte(st);
-  if (b == 'I') { fj_consume_keyword(st, "Infinity"); return rb_float_new(neg_sign ? -INFINITY : INFINITY); }
-  if (b == 'N') { fj_consume_keyword(st, "NaN"); return rb_float_new(NAN); }
-
-  if (b == '0') {
-    fj_advance(st, 1);
-    b = fj_byte(st);
-    if (b == 'x' || b == 'X') {
-      long hs;
-      VALUE hx;
-      fj_advance(st, 1);
-      hs = st->pos;
-      while ((b = fj_byte(st)) != -1 && (fj_hex_val(b) >= 0 || b == '_')) fj_advance(st, 1);
-      if (st->pos == hs) fj_error(st, "invalid hex number");
-      hx = rb_str_buf_new(16);
-      if (neg_sign) rb_str_buf_cat(hx, "-", 1);
-      { long i; for (i = hs; i < st->pos; i++) if (st->buf[i] != '_') rb_str_buf_cat(hx, st->buf + i, 1); }
-      return rb_str_to_inum(hx, 16, 0);
+  /* Integer part: a single '0', or [1-9] then digits/underscores. */
+  if (i < n && p[i] == '0') {
+    has_digit = 1; m10digits = 1; i++;
+  } else if (i < n && p[i] >= '1' && p[i] <= '9') {
+    has_digit = 1;
+    for (;;) {
+      while (i < n && p[i] >= '0' && p[i] <= '9') {
+        if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(p[i] - '0'); m10digits++; }
+        else overflow = 1;
+        i++;
+      }
+      if (i < n && p[i] == '_') { i++; continue; }  /* slow step: underscores are rare */
+      break;
     }
-  } else if (b >= '1' && b <= '9') {
-    while ((b = fj_byte(st)) != -1 && ((b >= '0' && b <= '9') || b == '_')) fj_advance(st, 1);
-  } else if (b == '.') {
-    /* leading decimal handled below */
+  }
+
+  /* Fraction. */
+  if (i < n && p[i] == '.') {
+    is_float = 1; i++;
+    for (;;) {
+      while (i < n && p[i] >= '0' && p[i] <= '9') {
+        has_digit = 1;
+        if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(p[i] - '0'); m10digits++; frac++; }
+        else overflow = 1;
+        i++;
+      }
+      if (i < n && p[i] == '_') { i++; continue; }
+      break;
+    }
+  }
+
+  /* Exponent: [eE] [+-]? then digits/underscores (at least one required). */
+  if (i < n && (p[i] == 'e' || p[i] == 'E')) {
+    long es;
+    int eneg = 0;
+    is_float = 1; i++;
+    if (i < n && (p[i] == '+' || p[i] == '-')) { eneg = (p[i] == '-'); i++; }
+    es = i;
+    while (i < n && ((p[i] >= '0' && p[i] <= '9') || p[i] == '_')) {
+      if (p[i] != '_' && !overflow) {
+        e10 = e10 * 10 + (p[i] - '0');
+        if (e10 > 1000000) overflow = 1;  /* extreme exponent -> strtod fallback on the slice */
+      }
+      i++;
+    }
+    if (i == es) return 0;  /* 'e' with no exponent digits -> not a number */
+    if (eneg) e10 = -e10;
+  }
+
+  if (i != n)     return 0;  /* token not fully consumed -> not a number (string) */
+  if (!has_digit) return 0;  /* e.g. "." or "+" -> not a number (string) */
+
+  if (!is_float) {
+    *out = fj_int_from_parts(m10, m10digits, neg, overflow, p, n);
+    return 1;
+  }
+  e10 -= frac;
+  /* :bigdecimal always; :auto only when significant digits > 16. m10digits is >=
+   * the significant-digit count, so m10digits <= 16 skips the fj_sig_digits scan. */
+  if (st->bigdecimal_load == 2 ||
+      (st->bigdecimal_load == 1 && m10digits > 16 && fj_sig_digits(p, n) > 16)) {
+    *out = fj_to_bigdecimal_token(p, n);
   } else {
+    *out = fj_float_from_parts(m10, m10digits, e10, neg, overflow, p, n);
+  }
+  return 1;
+}
+
+/* Top-level / strict-position number (JSON5 grammar). Single pass: the scan that
+ * finds the token boundary also accumulates the mantissa/exponent, so the common
+ * integer/float case never re-reads the token (no second extraction pass, and no
+ * separate fj_sig_digits pass). Scanning is a raw pointer loop that relies on the
+ * RSTRING_PTR NUL terminator as a sentinel — no per-byte bounds check — and the
+ * digit runs skip the per-byte '_' test (the leniency tax), dropping to a slow
+ * step only when an underscore actually appears. The extracted parts go through
+ * the same fj_*_from_parts helpers the quoteless path uses, so a token produces
+ * the identical Ruby value no matter which path scanned it. */
+static VALUE fj_parse_number(fj_state *st) {
+  const char *buf = st->buf;
+  const char *p   = buf + st->pos;  /* buf[len] == '\0' (RSTRING_PTR) is the scan sentinel */
+  const char *np  = p;              /* token start, includes a leading sign */
+  long   nlen;
+  int    is_float = 0, neg = 0, overflow = 0;
+  uint64_t m10 = 0;                 /* mantissa: integer + fraction digits */
+  int    m10digits = 0;             /* mantissa digit chars (caps the Ryū fast path at 17) */
+  int    frac = 0;                  /* fraction digit chars: e10 -= frac */
+  int64_t e10 = 0;
+
+  if (*p == '-' || *p == '+') { neg = (*p == '-'); p++; }
+
+  /* Cold branches (rare, not perf-critical): sync the cursor, reuse scalar helpers. */
+  if (*p == 'I') { st->pos = p - buf; fj_consume_keyword(st, "Infinity"); return rb_float_new(neg ? -INFINITY : INFINITY); }
+  if (*p == 'N') { st->pos = p - buf; fj_consume_keyword(st, "NaN");      return rb_float_new(NAN); }
+  if (*p == '0' && (p[1] == 'x' || p[1] == 'X')) {
+    const char *hs, *q;
+    VALUE hx;
+    p += 2;
+    hs = p;
+    while (fj_hex_val((unsigned char)*p) >= 0 || *p == '_') p++;
+    if (p == hs) { st->pos = p - buf; fj_error(st, "invalid hex number"); }
+    hx = rb_str_buf_new(16);
+    if (neg) rb_str_buf_cat(hx, "-", 1);
+    for (q = hs; q < p; q++) if (*q != '_') rb_str_buf_cat(hx, q, 1);
+    st->pos = p - buf;
+    return rb_str_to_inum(hx, 16, 0);
+  }
+
+  /* Integer part: a single '0', or [1-9] then digits/underscores. */
+  if (*p == '0') {
+    m10digits = 1;  /* one leading zero, counted as a single mantissa digit */
+    p++;
+  } else if (*p >= '1' && *p <= '9') {
+    for (;;) {
+      while (*p >= '0' && *p <= '9') {
+        if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; }
+        else overflow = 1;
+        p++;
+      }
+      if (*p == '_') { p++; continue; }  /* slow step: underscores are rare */
+      break;
+    }
+  } else if (*p == '.') {
+    /* leading decimal point: no integer part */
+  } else {
+    st->pos = p - buf;
     fj_error(st, "invalid number");
   }
 
-  if (fj_byte(st) == '.') {
+  /* Fraction. */
+  if (*p == '.') {
     is_float = 1;
-    fj_advance(st, 1);
-    while ((b = fj_byte(st)) != -1 && ((b >= '0' && b <= '9') || b == '_')) fj_advance(st, 1);
-  }
-  b = fj_byte(st);
-  if (b == 'e' || b == 'E') {
-    is_float = 1;
-    fj_advance(st, 1);
-    b = fj_byte(st);
-    if (b == '+' || b == '-') fj_advance(st, 1);
-    if (!((b = fj_byte(st)) >= '0' && b <= '9')) fj_error(st, "invalid number: expected digits in exponent");
-    while ((b = fj_byte(st)) != -1 && ((b >= '0' && b <= '9') || b == '_')) fj_advance(st, 1);
+    p++;
+    for (;;) {
+      while (*p >= '0' && *p <= '9') {
+        if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; frac++; }
+        else overflow = 1;
+        p++;
+      }
+      if (*p == '_') { p++; continue; }
+      break;
+    }
   }
 
-  {
-    const char *np = st->buf + start;
-    long nlen = st->pos - start;
-    return is_float ? fj_decimal_value(st, np, nlen) : fj_int_value(np, nlen);
+  /* Exponent. */
+  if (*p == 'e' || *p == 'E') {
+    int eneg = 0;
+    is_float = 1;
+    p++;
+    if (*p == '+' || *p == '-') { eneg = (*p == '-'); p++; }
+    if (!(*p >= '0' && *p <= '9')) { st->pos = p - buf; fj_error(st, "invalid number: expected digits in exponent"); }
+    while ((*p >= '0' && *p <= '9') || *p == '_') {
+      if (*p != '_' && !overflow) {
+        e10 = e10 * 10 + (*p - '0');
+        if (e10 > 1000000) overflow = 1;  /* extreme exponent -> strtod fallback on the slice */
+      }
+      p++;
+    }
+    if (eneg) e10 = -e10;
   }
+
+  st->pos = p - buf;
+  nlen = p - np;
+
+  if (!is_float) {
+    return fj_int_from_parts(m10, m10digits, neg, overflow, np, nlen);
+  }
+  e10 -= frac;
+  /* BigDecimal decision (same rule as fj_try_decimal): :bigdecimal always; :auto only
+   * when significant digits > 16. Since m10digits >= significant digits, m10digits
+   * <= 16 guarantees not-BigDecimal and lets us skip the fj_sig_digits scan
+   * entirely (the common case — e.g. every coordinate in canada.json). */
+  if (st->bigdecimal_load == 2 ||
+      (st->bigdecimal_load == 1 && m10digits > 16 && fj_sig_digits(np, nlen) > 16)) {
+    return fj_to_bigdecimal_token(np, nlen);
+  }
+  return fj_float_from_parts(m10, m10digits, e10, neg, overflow, np, nlen);
 }
 
 static VALUE fj_parse_literal(fj_state *st, const char *word, VALUE value) {
@@ -638,37 +730,10 @@ static int fj_is_hex_token(const char *p, long n) {
   return i == n;
 }
 
-/* Returns 0 (not a number), 1 (integer), 2 (float). Mirrors DEC_RE. */
-static int fj_validate_decimal(const char *p, long n) {
-  long i = 0;
-  int has_digit = 0, is_float = 0;
-  if (i < n && (p[i] == '+' || p[i] == '-')) i++;
-  if (i < n && p[i] == '0') { i++; has_digit = 1; }
-  else if (i < n && p[i] >= '1' && p[i] <= '9') {
-    has_digit = 1; i++;
-    while (i < n && ((p[i] >= '0' && p[i] <= '9') || p[i] == '_')) i++;
-  }
-  if (i < n && p[i] == '.') {
-    is_float = 1; i++;
-    while (i < n && ((p[i] >= '0' && p[i] <= '9') || p[i] == '_')) { if (p[i] != '_') has_digit = 1; i++; }
-  }
-  if (i < n && (p[i] == 'e' || p[i] == 'E')) {
-    long es;
-    is_float = 1; i++;
-    if (i < n && (p[i] == '+' || p[i] == '-')) i++;
-    es = i;
-    while (i < n && ((p[i] >= '0' && p[i] <= '9') || p[i] == '_')) i++;
-    if (i == es) return 0;
-  }
-  if (i != n) return 0;
-  if (!has_digit) return 0;
-  return is_float ? 2 : 1;
-}
-
 static VALUE fj_classify_quoteless(fj_state *st, const char *p0, long n0) {
   const char *p = p0;
   long n = n0;
-  int code, c0;
+  int c0;
   /* trim leading/trailing whitespace (ASCII or multibyte Unicode) */
   for (;;) {
     if (n > 0 && fj_is_ws((unsigned char)p[0])) { p++; n--; continue; }
@@ -709,8 +774,10 @@ static VALUE fj_classify_quoteless(fj_state *st, const char *p0, long n0) {
       for (; i < n; i++) if (p[i] != '_') rb_str_buf_cat(hx, p + i, 1);
       return rb_str_to_inum(hx, 16, 0);
     }
-    code = fj_validate_decimal(p, n);
-    if (code) return (code == 2) ? fj_decimal_value(st, p, n) : fj_int_value(p, n);
+    {
+      VALUE num;
+      if (fj_try_decimal(st, p, n, &num)) return num;
+    }
     return rb_enc_str_new(p, n, st->enc);
   }
 
