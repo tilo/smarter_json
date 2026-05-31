@@ -1,6 +1,11 @@
 
 # FlexJSON Change Log
 
+
+
+## 0.3.6 (2026-05-30 unreleased)
+- more performance improvements
+
 ## 0.3.5 (2026-05-30 unreleased)
 - more performance improvements
 

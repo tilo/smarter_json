@@ -928,13 +928,114 @@ static VALUE fj_parse_smart_string(fj_state *st, int kind) {
 /* Value in object-value or array-element position (scalar only — containers
  * are handled by the iterative driver below). Quoteless allowed. Assumes the
  * caller has already skipped whitespace/comments and checked for EOF. */
+/* Fast path for a plain decimal number in object-value / array-element position.
+ * Scans a clean JSON5 decimal straight from the cursor in one pass and commits
+ * ONLY when the number immediately abuts a value terminator (',', '}', ']',
+ * newline, or EOF) — true for essentially all real JSON, where a number touches
+ * its delimiter. On any deviation (trailing whitespace, a letter, a second '.',
+ * '0x…', '±Infinity', …) it restores the cursor and returns 0, so the caller
+ * falls back to the full quoteless scanner, which preserves every lenient rule
+ * ("1 2 3" as a string, hex, Infinity). This bypasses the quoteless boundary scan
+ * + classify dispatch (and the per-number Infinity/hex probes) for the common
+ * case. Value construction goes through the same fj_*_from_parts helpers the
+ * other number paths use, so results can't drift. Returns 1 and sets *out, or 0
+ * with the cursor unchanged. */
+static int fj_try_member_number(fj_state *st, VALUE *out) {
+  const char *buf = st->buf;
+  const char *p   = buf + st->pos;  /* RSTRING_PTR NUL terminator is the scan sentinel */
+  const char *np  = p;
+  long  nlen;
+  int   is_float = 0, neg = 0, overflow = 0, t;
+  uint64_t m10 = 0;
+  int   m10digits = 0, frac = 0;
+  int64_t e10 = 0;
+
+  if (*p == '-' || *p == '+') { neg = (*p == '-'); p++; }
+  /* Only a digit or '.' may open the numeric body; 'I'/'N'/etc. are left to the
+   * quoteless path (it handles ±Infinity and quoteless strings). */
+  if (!((*p >= '0' && *p <= '9') || *p == '.')) return 0;
+
+  /* Integer part: a single '0', or [1-9] then digits/underscores. */
+  if (*p == '0') {
+    m10digits = 1; p++;
+  } else if (*p >= '1' && *p <= '9') {
+    for (;;) {
+      while (*p >= '0' && *p <= '9') {
+        if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; }
+        else overflow = 1;
+        p++;
+      }
+      if (*p == '_') { p++; continue; }
+      break;
+    }
+  }
+
+  /* Fraction. */
+  if (*p == '.') {
+    is_float = 1; p++;
+    for (;;) {
+      while (*p >= '0' && *p <= '9') {
+        if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; frac++; }
+        else overflow = 1;
+        p++;
+      }
+      if (*p == '_') { p++; continue; }
+      break;
+    }
+  }
+
+  /* Exponent. */
+  if (*p == 'e' || *p == 'E') {
+    const char *es;
+    int eneg = 0;
+    is_float = 1; p++;
+    if (*p == '+' || *p == '-') { eneg = (*p == '-'); p++; }
+    es = p;
+    while ((*p >= '0' && *p <= '9') || *p == '_') {
+      if (*p != '_' && !overflow) { e10 = e10 * 10 + (*p - '0'); if (e10 > 1000000) overflow = 1; }
+      p++;
+    }
+    if (p == es) return 0;       /* 'e' with no exponent digits -> let quoteless decide */
+    if (eneg) e10 = -e10;
+  }
+
+  if (m10digits == 0) return 0;  /* e.g. "." or "+." -> not a number here */
+
+  /* Commit only if the number abuts a value terminator; otherwise (whitespace,
+   * letters, a second '.', "0x…", …) leave it to the quoteless scanner. */
+  t = (unsigned char)*p;
+  if (!(t == ',' || t == '}' || t == ']' || t == 0x0A || t == 0x0D || p == buf + st->len)) {
+    return 0;
+  }
+
+  st->pos = p - buf;
+  nlen = p - np;
+  if (!is_float) {
+    *out = fj_int_from_parts(m10, m10digits, neg, overflow, np, nlen);
+    return 1;
+  }
+  e10 -= frac;
+  if (st->bigdecimal_load == 2 ||
+      (st->bigdecimal_load == 1 && m10digits > 16 && fj_sig_digits(np, nlen) > 16)) {
+    *out = fj_to_bigdecimal_token(np, nlen);
+  } else {
+    *out = fj_float_from_parts(m10, m10digits, e10, neg, overflow, np, nlen);
+  }
+  return 1;
+}
+
 static VALUE fj_parse_member_value(fj_state *st) {
   int b = fj_byte(st);
   switch (b) {
     case '"':  return fj_parse_string(st, '"');
     case '\'': return fj_parse_single_or_triple(st);
     default: {
-      int kind = fj_smart_quote_kind(st);
+      int kind;
+      if (b == '-' || b == '+' || b == '.' || (b >= '0' && b <= '9')) {
+        VALUE num;
+        if (fj_try_member_number(st, &num)) return num;
+      }
+      kind = fj_smart_quote_kind(st);
       if (kind) return fj_parse_smart_string(st, kind);
       return fj_parse_quoteless_or_literal(st);
     }

@@ -472,6 +472,29 @@ second"', acceleration: acceleration)).to eq("firstsecond")
             expect(FlexJSON.parse("[1 2 3]", acceleration: acceleration)).to eq(["1 2 3"])
           end
 
+          # Boundary cases for the container-number fast path: a number commits
+          # only when it abuts a value terminator; anything else falls back to the
+          # quoteless scanner, which must still produce the identical result.
+          it "commits numbers that abut a delimiter (comma/bracket/brace/newline)" do
+            expect(FlexJSON.parse("[1,2,3]", acceleration: acceleration)).to eq([1, 2, 3])
+            expect(FlexJSON.parse('{"a":1,"b":2.5}', acceleration: acceleration)).to eq("a" => 1, "b" => 2.5)
+            expect(FlexJSON.parse("[1.5e3,-7]", acceleration: acceleration)).to eq([1500.0, -7])
+            expect(FlexJSON.parse("[\n1\n,\n2\n]", acceleration: acceleration)).to eq([1, 2])
+          end
+
+          it "still parses numbers correctly when whitespace separates them from the delimiter" do
+            expect(FlexJSON.parse("[1 , 2]", acceleration: acceleration)).to eq([1, 2])
+            expect(FlexJSON.parse("[3 ]", acceleration: acceleration)).to eq([3])
+            expect(FlexJSON.parse('{"a": 1 }', acceleration: acceleration)).to eq("a" => 1)
+          end
+
+          it "falls back to string/hex/Infinity for digit-led non-plain-numbers in containers" do
+            expect(FlexJSON.parse("[0xFF]", acceleration: acceleration)).to eq([255])
+            expect(FlexJSON.parse("[-Infinity, 12]", acceleration: acceleration)).to eq([-Float::INFINITY, 12])
+            expect(FlexJSON.parse("[1.2.3]", acceleration: acceleration)).to eq(["1.2.3"])
+            expect(FlexJSON.parse("[1_000, 2_000]", acceleration: acceleration)).to eq([1000, 2000])
+          end
+
           it "parses [red green blue] as a single-element array with one string" do
             expect(FlexJSON.parse("[red green blue]", acceleration: acceleration)).to eq(["red green blue"])
           end
