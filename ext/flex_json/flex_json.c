@@ -858,20 +858,6 @@ static VALUE fj_parse_smart_string(fj_state *st, int kind) {
 
 /* --- containers --- */
 
-static void fj_store_member(fj_state *st, VALUE hash, VALUE key, VALUE value) {
-  VALUE k = st->symbolize_keys ? rb_funcall(key, fj_to_sym_id, 0) : key;
-  /* Only :first_wins / :raise need a per-member lookup; the default :last_wins
-   * is just an overwrite, which rb_hash_aset already does — so don't pay a
-   * Ruby method dispatch per member in the common case. */
-  if (st->dup_first_wins || st->dup_raise) {
-    if (RTEST(rb_funcall(hash, fj_key_p_id, 1, k))) {
-      if (st->dup_first_wins) return;
-      fj_error(st, "duplicate key");
-    }
-  }
-  rb_hash_aset(hash, k, value);
-}
-
 /* Value in object-value or array-element position (scalar only — containers
  * are handled by the iterative driver below). Quoteless allowed. Assumes the
  * caller has already skipped whitespace/comments and checked for EOF. */
@@ -916,52 +902,151 @@ static VALUE fj_parse_value(fj_state *st) {
   return Qnil; /* unreachable */
 }
 
-/* Iterative container parser — explicit stack, no C recursion, so nesting is
- * bounded only by memory (like Oj), not the C call stack. Each new container is
- * attached to its parent immediately, and the working stack is a Ruby Array, so
- * the whole partial tree stays reachable from `root` (GC-safe) and the stack
- * frees itself. */
-static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
-  VALUE stack = rb_ary_new();
-  VALUE root = Qnil;
-  VALUE cur = Qundef;   /* innermost container, or Qundef while at top level */
-  int cur_obj = 0;
+/* --- container building: pre-sized hash + bulk insert (json/Oj style) --- */
 
-  if (implicit_root) {
-    root = rb_hash_new();
-    rb_ary_push(stack, root);
-    cur = root;
-    cur_obj = 1;
+#ifndef HAVE_RB_HASH_NEW_CAPA
+#define rb_hash_new_capa(n) rb_hash_new()
+#endif
+
+#ifndef HAVE_RB_HASH_BULK_INSERT
+static void fj_hash_bulk_insert(long count, const VALUE *pairs, VALUE hash) {
+  long i;
+  for (i = 0; i + 1 < count; i += 2) rb_hash_aset(hash, pairs[i], pairs[i + 1]);
+}
+#define rb_hash_bulk_insert fj_hash_bulk_insert
+#endif
+
+/* Build a Hash from `count` interleaved key,value slots. Fast path (String keys,
+ * default :last_wins or :raise): pre-size + bulk insert, detecting duplicates by
+ * comparing the resulting size to the pair count — free unless a collision
+ * actually happened. symbolize_keys / :first_wins use a per-member loop into the
+ * same pre-sized hash. */
+static VALUE fj_build_object(fj_state *st, const VALUE *pairs, long count) {
+  long  entries = count / 2, i;
+  VALUE hash    = rb_hash_new_capa(entries);
+
+  if (!st->symbolize_keys && !st->dup_first_wins) {
+    rb_hash_bulk_insert(count, pairs, hash);
+    if (st->dup_raise && (long)RHASH_SIZE(hash) < entries) {
+      VALUE seen = rb_hash_new_capa(entries);
+      for (i = 0; i + 1 < count; i += 2) {
+        long before = (long)RHASH_SIZE(seen);
+        rb_hash_aset(seen, pairs[i], Qtrue);
+        if ((long)RHASH_SIZE(seen) == before) fj_error(st, "duplicate key");
+      }
+    }
+    return hash;
   }
 
-  for (;;) {
-    int b;
+  for (i = 0; i + 1 < count; i += 2) {
+    VALUE k = st->symbolize_keys ? rb_funcall(pairs[i], fj_to_sym_id, 0) : pairs[i];
+    if (st->dup_first_wins || st->dup_raise) {
+      if (RTEST(rb_funcall(hash, fj_key_p_id, 1, k))) {
+        if (st->dup_first_wins) continue;
+        fj_error(st, "duplicate key");
+      }
+    }
+    rb_hash_aset(hash, k, pairs[i + 1]);
+  }
+  return hash;
+}
 
-    if (cur == Qundef) { /* top level: parse exactly one value */
+/* --- working stacks: a GC-marked C value stack + a frame/mark stack ---
+ * Pending values for not-yet-closed containers live on an explicit C array (not
+ * a Ruby Array, so no Ruby-object op per value). Both buffers sit in one
+ * TypedData object: GC marks the pending values via fj_pstack_mark, and frees
+ * the buffers even if parsing raises mid-document. */
+typedef struct { long mark; int is_obj; } fj_frame;
+
+typedef struct {
+  VALUE    *vptr;  long vhead;  long vcapa;  /* pending values (GC-marked) */
+  fj_frame *fptr;  long fhead;  long fcapa;  /* open-container frames (no VALUEs) */
+} fj_pstack;
+
+static void fj_pstack_mark(void *p) {
+  fj_pstack *ps = (fj_pstack *)p;
+  long i;
+  for (i = 0; i < ps->vhead; i++) rb_gc_mark(ps->vptr[i]);
+}
+static void fj_pstack_free(void *p) {
+  fj_pstack *ps = (fj_pstack *)p;
+  if (ps->vptr != NULL) xfree(ps->vptr);
+  if (ps->fptr != NULL) xfree(ps->fptr);
+  xfree(ps);
+}
+static size_t fj_pstack_memsize(const void *p) {
+  const fj_pstack *ps = (const fj_pstack *)p;
+  return sizeof(fj_pstack) + (size_t)ps->vcapa * sizeof(VALUE) + (size_t)ps->fcapa * sizeof(fj_frame);
+}
+static const rb_data_type_t fj_pstack_type = {
+  "flex_json/pstack",
+  { fj_pstack_mark, fj_pstack_free, fj_pstack_memsize, },
+  0, 0, RUBY_TYPED_FREE_IMMEDIATELY,
+};
+
+static inline void fj_vpush(fj_pstack *ps, VALUE v) {
+  if (ps->vhead >= ps->vcapa) { ps->vcapa *= 2; REALLOC_N(ps->vptr, VALUE, ps->vcapa); }
+  ps->vptr[ps->vhead++] = v;
+}
+static inline void fj_fpush(fj_pstack *ps, long mark, int is_obj) {
+  if (ps->fhead >= ps->fcapa) { ps->fcapa *= 2; REALLOC_N(ps->fptr, fj_frame, ps->fcapa); }
+  ps->fptr[ps->fhead].mark   = mark;
+  ps->fptr[ps->fhead].is_obj = is_obj;
+  ps->fhead++;
+}
+
+/* Iterative container parser — no C recursion. Each container's members/elements
+ * are collected on the value stack and built at its closing brace with a
+ * pre-sized hash + bulk insert (objects) or rb_ary_new_from_values (arrays). */
+static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
+  fj_pstack *ps;
+  VALUE      ps_obj = TypedData_Make_Struct(rb_cObject, fj_pstack, &fj_pstack_type, ps);
+  VALUE      result = Qnil;
+
+  ps->vptr = ALLOC_N(VALUE, 64);    ps->vhead = 0; ps->vcapa = 64;
+  ps->fptr = ALLOC_N(fj_frame, 16); ps->fhead = 0; ps->fcapa = 16;
+
+  if (implicit_root) fj_fpush(ps, 0, 1);
+
+  for (;;) {
+    int  b;
+    long mark;
+    int  is_obj;
+
+    if (ps->fhead == 0) { /* top level: parse exactly one value */
       fj_skip_ws_comments(st);
       b = fj_byte(st);
-      if (b == '{') { fj_advance(st, 1); root = rb_hash_new(); rb_ary_push(stack, root); cur = root; cur_obj = 1; continue; }
-      if (b == '[') { fj_advance(st, 1); root = rb_ary_new();  rb_ary_push(stack, root); cur = root; cur_obj = 0; continue; }
+      if (b == '{') { fj_advance(st, 1); fj_fpush(ps, ps->vhead, 1); continue; }
+      if (b == '[') { fj_advance(st, 1); fj_fpush(ps, ps->vhead, 0); continue; }
       if (b == -1) fj_error(st, "unexpected end of input");
-      return fj_parse_value(st);
+      result = fj_parse_value(st);
+      break;
     }
 
-    if (cur_obj) {
+    mark   = ps->fptr[ps->fhead - 1].mark;
+    is_obj = ps->fptr[ps->fhead - 1].is_obj;
+
+    if (is_obj) {
       VALUE key;
       fj_skip_ws_comments(st);
       b = fj_byte(st);
       if (b == '}') {
+        VALUE hash;
         fj_advance(st, 1);
-        rb_ary_pop(stack);
-        if (RARRAY_LEN(stack) == 0) return root;
-        cur = rb_ary_entry(stack, RARRAY_LEN(stack) - 1);
-        cur_obj = RB_TYPE_P(cur, T_HASH);
+        hash = fj_build_object(st, &ps->vptr[mark], ps->vhead - mark);
+        ps->vhead = mark;
+        ps->fhead--;
+        if (ps->fhead == 0) { result = hash; break; }
+        fj_vpush(ps, hash);
         fj_skip_ws_comments(st);
         if (fj_byte(st) == ',') fj_advance(st, 1);
         continue;
       }
       if (b == -1) {
-        if (implicit_root && RARRAY_LEN(stack) == 1) return root;
+        if (implicit_root && ps->fhead == 1) {
+          result = fj_build_object(st, &ps->vptr[mark], ps->vhead - mark);
+          break;
+        }
         fj_error(st, "unterminated object");
       }
       if (b == ']') fj_error(st, "unexpected ']' — expected a key or '}'");
@@ -972,27 +1057,27 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
       fj_skip_ws_comments(st);
       b = fj_byte(st);
       if (b == '{' || b == '[') {
-        VALUE c = (b == '{') ? rb_hash_new() : rb_ary_new();
-        fj_advance(st, 1); /* consume the opening '{' or '[' */
-        fj_store_member(st, cur, key, c);
-        rb_ary_push(stack, c);
-        cur = c;
-        cur_obj = (b == '{');
+        fj_vpush(ps, key);
+        fj_advance(st, 1);
+        fj_fpush(ps, ps->vhead, (b == '{'));
         continue;
       }
       if (b == -1) fj_error(st, "unexpected end of input");
-      fj_store_member(st, cur, key, fj_parse_member_value(st));
+      fj_vpush(ps, key);
+      fj_vpush(ps, fj_parse_member_value(st));
       fj_skip_ws_comments(st); /* skip_separator_run */
       if (fj_byte(st) == ',') fj_advance(st, 1);
     } else { /* array */
       fj_skip_ws_comments(st);
       b = fj_byte(st);
       if (b == ']') {
+        VALUE ary;
         fj_advance(st, 1);
-        rb_ary_pop(stack);
-        if (RARRAY_LEN(stack) == 0) return root;
-        cur = rb_ary_entry(stack, RARRAY_LEN(stack) - 1);
-        cur_obj = RB_TYPE_P(cur, T_HASH);
+        ary = rb_ary_new_from_values(ps->vhead - mark, &ps->vptr[mark]);
+        ps->vhead = mark;
+        ps->fhead--;
+        if (ps->fhead == 0) { result = ary; break; }
+        fj_vpush(ps, ary);
         fj_skip_ws_comments(st);
         if (fj_byte(st) == ',') fj_advance(st, 1);
         continue;
@@ -1000,19 +1085,18 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
       if (b == -1) fj_error(st, "unterminated array");
       if (b == '}') fj_error(st, "unexpected '}' — expected ']' or a value");
       if (b == '{' || b == '[') {
-        VALUE c = (b == '{') ? rb_hash_new() : rb_ary_new();
-        fj_advance(st, 1); /* consume the opening '{' or '[' */
-        rb_ary_push(cur, c);
-        rb_ary_push(stack, c);
-        cur = c;
-        cur_obj = (b == '{');
+        fj_advance(st, 1);
+        fj_fpush(ps, ps->vhead, (b == '{'));
         continue;
       }
-      rb_ary_push(cur, fj_parse_member_value(st));
+      fj_vpush(ps, fj_parse_member_value(st));
       fj_skip_ws_comments(st); /* skip_separator_run */
       if (fj_byte(st) == ',') fj_advance(st, 1);
     }
   }
+
+  RB_GC_GUARD(ps_obj);
+  return result;
 }
 
 /* At the start of a document: identifier followed by ':' means implicit root

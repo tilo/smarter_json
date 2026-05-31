@@ -22,4 +22,9 @@ CONFIG["debugflags"] = ""
 # input bytes; on older Rubies the C code falls back to a plain new string.
 have_func("rb_enc_interned_str", "ruby.h")
 
+# Pre-sized hashes (3.2+) and bulk insert (2.6+) for object building; the C code
+# falls back to rb_hash_new + per-pair aset when these are unavailable.
+have_func("rb_hash_new_capa", "ruby.h")
+have_func("rb_hash_bulk_insert", "ruby.h")
+
 create_makefile("flex_json/flex_json")
