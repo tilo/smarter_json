@@ -6,6 +6,18 @@
 #endif
 #include "vendor/ryu.h" /* Ryū string->double, correctly rounded (Ulf Adams, Apache-2.0) */
 
+/* Branch hints / prefetch on the hot scan loops. No-ops on compilers without the
+ * builtins (the code is correct either way; these only steer code layout). */
+#if defined(__GNUC__) || defined(__clang__)
+#  define FJ_LIKELY(x)   __builtin_expect(!!(x), 1)
+#  define FJ_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#  define FJ_PREFETCH(p) __builtin_prefetch(p)
+#else
+#  define FJ_LIKELY(x)   (x)
+#  define FJ_UNLIKELY(x) (x)
+#  define FJ_PREFETCH(p) ((void)0)
+#endif
+
 /*
  * flex_json C extension — self-contained parser (no callbacks into Ruby parse
  * logic). One entry point, FlexJSON.parse_c (made private on the Ruby side).
@@ -243,10 +255,11 @@ static const char *fj_scan_str(const char *p, const char *end, int quote) {
     /* movemask emulation (Oj's technique): pack to 4 bits/byte, then ctz/4. */
     uint8x8_t  res   = vshrn_n_u16(vreinterpretq_u16_u8(m), 4);
     uint64_t   mask  = vget_lane_u64(vreinterpret_u64_u8(res), 0);
-    if (mask != 0) {
+    if (FJ_UNLIKELY(mask != 0)) {  /* most 16-byte chunks contain no quote/backslash */
       mask &= 0x8888888888888888ull;
       return p + (__builtin_ctzll(mask) >> 2);
     }
+    FJ_PREFETCH(p + 64);
     p += 16;
   }
 #endif
@@ -267,12 +280,12 @@ static VALUE fj_parse_string(fj_state *st, int quote) {
   hit = fj_scan_str(st->buf + st->pos, st->buf + st->len, quote);
   fj_advance(st, hit - (st->buf + st->pos));
   b = fj_byte(st);
-  if (b == quote) {
+  if (FJ_LIKELY(b == quote)) {  /* common case: a string with no escapes */
     VALUE s = rb_enc_str_new(st->buf + start, st->pos - start, st->enc);
     fj_advance(st, 1);
     return s;
   }
-  if (b == -1) fj_error(st, "unterminated string");
+  if (FJ_UNLIKELY(b == -1)) fj_error(st, "unterminated string");
 
   buf = rb_str_buf_new(st->pos - start + 16);
   rb_enc_associate(buf, rb_ascii8bit_encoding());
@@ -321,9 +334,12 @@ static VALUE fj_parse_string(fj_state *st, int quote) {
           fj_error(st, "invalid escape");
       }
     } else {
-      char c = (char)b;
-      rb_str_buf_cat(buf, &c, 1);
-      fj_advance(st, 1);
+      /* Literal run between escapes: NEON-scan to the next quote/backslash and
+       * bulk-copy the whole run in one rb_str_buf_cat, rather than byte by byte. */
+      const char *p0 = st->buf + st->pos;
+      const char *h  = fj_scan_str(p0, st->buf + st->len, quote);
+      rb_str_buf_cat(buf, p0, h - p0);
+      fj_advance(st, h - p0);
     }
   }
   fj_error(st, "unterminated string");
@@ -961,7 +977,7 @@ static int fj_try_member_number(fj_state *st, VALUE *out) {
   } else if (*p >= '1' && *p <= '9') {
     for (;;) {
       while (*p >= '0' && *p <= '9') {
-        if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; }
+        if (FJ_LIKELY(m10digits < 18)) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; }
         else overflow = 1;
         p++;
       }
@@ -975,7 +991,7 @@ static int fj_try_member_number(fj_state *st, VALUE *out) {
     is_float = 1; p++;
     for (;;) {
       while (*p >= '0' && *p <= '9') {
-        if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; frac++; }
+        if (FJ_LIKELY(m10digits < 18)) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; frac++; }
         else overflow = 1;
         p++;
       }
