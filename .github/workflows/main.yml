@@ -18,6 +18,7 @@ jobs:
   test_matrix:
     name: Ruby ${{ matrix.ruby }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}-latest
+    environment: test # so the job can read CODECOV_TOKEN from the "test" environment's secrets
     strategy:
       fail-fast: false
       matrix:
