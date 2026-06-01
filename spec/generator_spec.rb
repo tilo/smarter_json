@@ -149,6 +149,87 @@ RSpec.describe "SmarterJSON.generate" do
     end
   end
 
+  describe "ascii_only: escape non-ASCII as \\uXXXX" do
+    it "leaves ASCII unchanged" do
+      expect(SmarterJSON.generate("hello", ascii_only: true)).to eq('"hello"')
+    end
+
+    it "escapes a BMP non-ASCII char" do
+      e_acute = [0x00E9].pack("U") # é
+      expect(SmarterJSON.generate(e_acute, ascii_only: true)).to eq('"\u00e9"')
+    end
+
+    it "escapes an astral (> U+FFFF) char as a UTF-16 surrogate pair" do
+      grinning = [0x1F600].pack("U") # 😀
+      expect(SmarterJSON.generate(grinning, ascii_only: true)).to eq('"\ud83d\ude00"')
+    end
+
+    it "escapes non-ASCII in object keys too" do
+      key = [0x00E9].pack("U")
+      expect(SmarterJSON.generate({ key => 1 }, ascii_only: true)).to eq('{"\u00e9":1}')
+    end
+
+    it "default (ascii_only off) emits raw UTF-8" do
+      cafe = "caf#{[0x00E9].pack('U')}"
+      expect(SmarterJSON.generate(cafe)).to eq(%("#{cafe}"))
+    end
+  end
+
+  describe "script_safe: escape </ and JS line separators" do
+    it "escapes the slash in </ so it cannot close a <script> tag" do
+      expect(SmarterJSON.generate("</script>", script_safe: true)).to eq('"<\/script>"')
+    end
+
+    it "escapes U+2028 and U+2029" do
+      expect(SmarterJSON.generate([0x2028].pack("U"), script_safe: true)).to eq('"\u2028"')
+      expect(SmarterJSON.generate([0x2029].pack("U"), script_safe: true)).to eq('"\u2029"')
+    end
+
+    it "leaves a slash that is not part of </ alone" do
+      expect(SmarterJSON.generate("http://example.com", script_safe: true)).to eq('"http://example.com"')
+    end
+
+    it "default (script_safe off) leaves </ and separators raw" do
+      expect(SmarterJSON.generate("</x>")).to eq('"</x>"')
+      ls = [0x2028].pack("U")
+      expect(SmarterJSON.generate(ls)).to eq(%("#{ls}"))
+    end
+  end
+
+  describe "sort_keys: emit object keys in sorted order" do
+    it "sorts string keys" do
+      expect(SmarterJSON.generate({ "b" => 1, "a" => 2, "c" => 3 }, sort_keys: true)).to eq('{"a":2,"b":1,"c":3}')
+    end
+
+    it "sorts nested objects too" do
+      expect(SmarterJSON.generate({ "z" => { "b" => 1, "a" => 2 } }, sort_keys: true)).to eq('{"z":{"a":2,"b":1}}')
+    end
+
+    it "sorts Symbol keys by their string form" do
+      expect(SmarterJSON.generate({ b: 1, a: 2 }, sort_keys: true)).to eq('{"a":2,"b":1}')
+    end
+
+    it "default preserves insertion order" do
+      expect(SmarterJSON.generate({ "b" => 1, "a" => 2 })).to eq('{"b":1,"a":2}')
+    end
+
+    it "works together with indent" do
+      expect(SmarterJSON.generate({ "b" => 1, "a" => 2 }, sort_keys: true, indent: 2)).to eq(<<~JSON.chomp)
+        {
+          "a": 2,
+          "b": 1
+        }
+      JSON
+    end
+  end
+
+  describe "combining writer options" do
+    it "applies ascii_only and script_safe together" do
+      s = "</s>#{[0x00E9].pack('U')}"
+      expect(SmarterJSON.generate(s, ascii_only: true, script_safe: true)).to eq('"<\/s>\u00e9"')
+    end
+  end
+
   describe "errors" do
     it "raises ArgumentError on an unknown writer format" do
       expect { SmarterJSON.generate({}, format: :bogus) }.to raise_error(ArgumentError, /format/)

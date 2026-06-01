@@ -43,16 +43,22 @@ These options are passed to [`SmarterJSON.generate`](./basic_write_api.md) as th
 
 | Option     | Default | Explanation                                                                                                                |
 |------------|---------|-----------------------------------------------------------------------------------------------------------------------------|
-| `:format`  | `:json` | `:json` writes standard JSON (Hash → object, Array → array, scalar → scalar). `:ndjson` writes newline-delimited JSON: an Array becomes one element per line, any other value becomes a single line. |
-| `:indent`  | `0`     | Spaces per nesting level for pretty-printing. `0` (the default) is compact output. Empty objects/arrays stay inline. Not allowed with `:ndjson` (a record must be a single line). |
+| `:format`       | `:json` | `:json` writes standard JSON (Hash → object, Array → array, scalar → scalar). `:ndjson` writes newline-delimited JSON: an Array becomes one element per line, any other value becomes a single line. |
+| `:indent`       | `0`     | Spaces per nesting level for pretty-printing. `0` (the default) is compact output. Empty objects/arrays stay inline. Not allowed with `:ndjson` (a record must be a single line). |
+| `:sort_keys`    | `false` | Emit object keys in sorted order (Symbol keys sorted by their string form). Useful for canonical, diff-friendly output. |
+| `:ascii_only`   | `false` | Escape every non-ASCII character as `\uXXXX` (astral characters as a UTF-16 surrogate pair). The default emits raw UTF-8. |
+| `:script_safe`  | `false` | Escape the `/` in `</` and the JS line separators U+2028 / U+2029, so output is safe to embed in an HTML `<script>` tag. |
 
 Any other `:format` value, a negative/non-Integer `:indent`, or combining `:indent` with `:ndjson`, raises `ArgumentError`.
 
 ```ruby
-SmarterJSON.generate([1, 2, 3])                          # => "[1,2,3]"   (default :json — a single JSON array)
-SmarterJSON.generate([1, 2, 3], format: :ndjson)         # => "1\n2\n3\n" (one element per line)
-SmarterJSON.generate({ "a" => 1 }, indent: 2)            # => "{\n  \"a\": 1\n}"  (pretty-printed)
-SmarterJSON.generate({}, format: :bogus)                 # raises ArgumentError
+SmarterJSON.generate([1, 2, 3])                              # => "[1,2,3]"   (default :json — a single JSON array)
+SmarterJSON.generate([1, 2, 3], format: :ndjson)            # => "1\n2\n3\n" (one element per line)
+SmarterJSON.generate({ "a" => 1 }, indent: 2)               # => "{\n  \"a\": 1\n}"  (pretty-printed)
+SmarterJSON.generate({ "b" => 2, "a" => 1 }, sort_keys: true) # => '{"a":1,"b":2}'
+SmarterJSON.generate("café", ascii_only: true)              # => '"caf\u00e9"'
+SmarterJSON.generate("</script>", script_safe: true)        # => '"<\/script>"'
+SmarterJSON.generate({}, format: :bogus)                    # raises ArgumentError
 ```
 
 ---------------

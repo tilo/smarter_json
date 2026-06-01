@@ -83,6 +83,21 @@ which prints as:
 
 Empty objects and arrays stay inline (`{}` / `[]`) even when indenting. `indent: 0` (the default) is compact output. Pretty-printing is multi-line, so it can't be combined with `format: :ndjson` (where each record must be a single line) — doing so raises `ArgumentError`. See [Configuration Options](./options.md).
 
+## Safe and canonical output
+
+Three more options shape the output, and they compose with each other and with `indent:`:
+
+- **`sort_keys: true`** — emit object keys in sorted order (Symbol keys sorted by their string form). Handy for canonical, diff-friendly JSON.
+- **`ascii_only: true`** — escape every non-ASCII character as `\uXXXX` (characters above U+FFFF become a UTF-16 surrogate pair). The default emits raw UTF-8.
+- **`script_safe: true`** — escape the `/` in `</` and the JavaScript line separators U+2028 / U+2029, so the output is safe to embed directly in an HTML `<script>` tag without breaking out of it.
+
+```ruby
+SmarterJSON.generate({ "b" => 2, "a" => 1 }, sort_keys: true)   # => '{"a":1,"b":2}'
+SmarterJSON.generate("</script>", script_safe: true)            # => '"<\/script>"'
+```
+
+See [Configuration Options](./options.md) for the full table.
+
 ## Writing NDJSON
 
 Pass `format: :ndjson` to write newline-delimited JSON. An `Array` writes **one element per line**; any other value writes as a single line. This is the exact inverse of [reading NDJSON](./basic_read_api.md) back into an Array.

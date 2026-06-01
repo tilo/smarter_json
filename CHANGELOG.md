@@ -1,8 +1,9 @@
 
 # SmarterJSON Change Log
 
-## unreleased
+## 0.5.2 (2026-06-01)
 - `generate` now supports pretty-printing via the `indent:` option (spaces per nesting level; default `0` = compact). Empty objects/arrays stay inline; `indent:` combined with `format: :ndjson` raises `ArgumentError`.
+- `generate` adds `sort_keys:` (emit object keys in sorted order), `ascii_only:` (escape non-ASCII as `\uXXXX`, astral chars as surrogate pairs), and `script_safe:` (escape `</` and U+2028/U+2029 for safe embedding in an HTML `<script>` tag).
 
 ## 0.5.1 (2026-06-01)
 - Unified the error classes under a single `SmarterJSON::Error` base: `ParseError` and `EncodingError` now inherit from it, and `generate` raises a new `GenerateError`. `rescue SmarterJSON::Error` now catches everything the gem raises.

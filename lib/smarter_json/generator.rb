@@ -49,6 +49,11 @@ module SmarterJSON
       end
 
       @pretty = @indent > 0
+
+      @ascii_only  = options.fetch(:ascii_only, false)  # escape non-ASCII as \uXXXX
+      @script_safe = options.fetch(:script_safe, false) # escape </ and U+2028 / U+2029
+      @sort_keys   = options.fetch(:sort_keys, false)   # emit object keys in sorted order
+      @escape_re   = build_escape_re
     end
 
     def generate(obj)
@@ -113,11 +118,13 @@ module SmarterJSON
     def emit_hash(hash, buf, level)
       return buf << "{}" if hash.empty? # empty stays inline, even in pretty mode
 
+      pairs = @sort_keys ? hash.sort_by { |k, _| k.is_a?(String) ? k : k.to_s } : hash
+
       if @pretty
         pad = " " * (@indent * (level + 1))
         buf << "{\n"
         first = true
-        hash.each do |k, v|
+        pairs.each do |k, v|
           buf << ",\n" unless first
           first = false
           buf << pad
@@ -129,7 +136,7 @@ module SmarterJSON
       else
         buf << "{"
         first = true
-        hash.each do |k, v|
+        pairs.each do |k, v|
           buf << "," unless first
           first = false
           emit_string(k.is_a?(String) ? k : k.to_s, buf) # Symbol/other keys -> string
@@ -141,9 +148,33 @@ module SmarterJSON
     end
 
     def emit_string(str, buf)
-      buf << '"'
-      buf << str.gsub(ESCAPE_RE) { |c| ESCAPE[c] || format("\\u%04x", c.ord) }
-      buf << '"'
+      buf << '"' << str.gsub(@escape_re) { |m| escape_match(m) } << '"'
+    end
+
+    # Per-instance escape regex from the active options. Always: ", backslash, C0
+    # controls. script_safe adds the slash in </ and the JS line separators
+    # U+2028/U+2029. ascii_only adds every non-ASCII char.
+    def build_escape_re
+      res = [ESCAPE_RE]
+      res.unshift(%r{</}) if @script_safe
+      res << Regexp.new("[#{[0x2028, 0x2029].pack('U*')}]") if @script_safe
+      res << /[^\x00-\x7f]/ if @ascii_only
+      Regexp.union(*res)
+    end
+
+    def escape_match(m)
+      return "<\\/" if m == "</" # <\/ — stops </ from closing a <script> tag
+
+      ESCAPE[m] || unicode_escape(m)
+    end
+
+    # \uXXXX for a BMP char; a UTF-16 surrogate pair for astral (> U+FFFF) chars.
+    def unicode_escape(char)
+      cp = char.ord
+      return format("\\u%04x", cp) if cp <= 0xffff
+
+      cp -= 0x10000
+      format("\\u%04x\\u%04x", 0xd800 + (cp >> 10), 0xdc00 + (cp & 0x3ff))
     end
 
     def emit_float(flt, buf)
