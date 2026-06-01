@@ -60,6 +60,21 @@ SmarterJSON.generate(Float::NAN)        # raises SmarterJSON::GenerateError — 
 
 (`GenerateError` is a kind of `SmarterJSON::Error`, so `rescue SmarterJSON::Error` catches it. `Infinity` and `NaN` are accepted on the *read* side as a leniency, but they are not valid JSON to *write*.)
 
+By default `generate` is strict: it only writes the types above and raises on anything else. To serialize `Time`, `Date`, or your own objects, pass `coerce: true` — an unsupported value is then converted by its own `as_json` (whose result is re-emitted, so escaping/`indent`/`sort_keys` still apply) or, failing that, `to_json` (spliced verbatim):
+
+```ruby
+class Money
+  def as_json(*)
+    { "cents" => @cents, "currency" => @currency }
+  end
+end
+
+SmarterJSON.generate({ "price" => Money.new(500, "USD") }, coerce: true)
+# => '{"price":{"cents":500,"currency":"USD"}}'
+```
+
+Strict-by-default stays the default precisely so you opt in to delegating serialization rather than silently emitting an object's `to_s`. See [Configuration Options](./options.md).
+
 ## Pretty-printing
 
 By default `generate` produces compact output (no spaces). Pass `indent:` (a number of spaces per nesting level) to pretty-print:

@@ -230,6 +230,66 @@ RSpec.describe "SmarterJSON.generate" do
     end
   end
 
+  describe "coerce: serialize unknown types via as_json / to_json (opt-in)" do
+    it "raises GenerateError on an unknown type by default (coerce off)" do
+      expect { SmarterJSON.generate(Object.new) }.to raise_error(SmarterJSON::GenerateError)
+    end
+
+    it "calls as_json and emits the returned structure" do
+      obj = Object.new
+      def obj.as_json(*)
+        { "kind" => "thing", "n" => 1 }
+      end
+      expect(SmarterJSON.generate(obj, coerce: true)).to eq('{"kind":"thing","n":1}')
+    end
+
+    it "emits the as_json result through the normal pipeline (sort_keys still applies)" do
+      obj = Object.new
+      def obj.as_json(*)
+        { "b" => 2, "a" => 1 }
+      end
+      expect(SmarterJSON.generate(obj, coerce: true, sort_keys: true)).to eq('{"a":1,"b":2}')
+    end
+
+    it "prefers as_json over to_json" do
+      obj = Object.new
+      def obj.as_json(*)
+        { "via" => "as_json" }
+      end
+
+      def obj.to_json(*)
+        '{"via":"to_json"}'
+      end
+      expect(SmarterJSON.generate(obj, coerce: true)).to eq('{"via":"as_json"}')
+    end
+
+    it "falls back to to_json (spliced verbatim) when as_json is absent" do
+      obj = Object.new
+      def obj.to_json(*)
+        '{"raw":true}'
+      end
+      expect(SmarterJSON.generate(obj, coerce: true)).to eq('{"raw":true}')
+    end
+
+    it "coerces recursively (an as_json result may itself contain objects needing coercion)" do
+      inner = Object.new
+      def inner.as_json(*)
+        "inner!"
+      end
+      outer = Object.new
+      outer.define_singleton_method(:as_json) { { "x" => inner } }
+      expect(SmarterJSON.generate(outer, coerce: true)).to eq('{"x":"inner!"}')
+    end
+
+    it "still raises GenerateError when the value defines neither as_json nor to_json" do
+      klass = Class.new do
+        undef_method :to_json if method_defined?(:to_json)
+        undef_method :as_json if method_defined?(:as_json)
+      end
+      expect { SmarterJSON.generate(klass.new, coerce: true) }.to raise_error(SmarterJSON::GenerateError)
+    end
+  end
+
   describe "errors" do
     it "raises ArgumentError on an unknown writer format" do
       expect { SmarterJSON.generate({}, format: :bogus) }.to raise_error(ArgumentError, /format/)

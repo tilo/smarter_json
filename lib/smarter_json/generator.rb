@@ -53,6 +53,7 @@ module SmarterJSON
       @ascii_only  = options.fetch(:ascii_only, false)  # escape non-ASCII as \uXXXX
       @script_safe = options.fetch(:script_safe, false) # escape </ and U+2028 / U+2029
       @sort_keys   = options.fetch(:sort_keys, false)   # emit object keys in sorted order
+      @coerce      = options.fetch(:coerce, false)      # convert unknown types via as_json / to_json
       @escape_re   = build_escape_re
     end
 
@@ -89,7 +90,23 @@ module SmarterJSON
       when Array      then emit_array(obj, buf, level)
       when Hash       then emit_hash(obj, buf, level)
       else
+        return emit_coerced(obj, buf, level) if @coerce
+
         raise SmarterJSON::GenerateError, "SmarterJSON.generate cannot serialize #{obj.class}"
+      end
+    end
+
+    # coerce: true — let a value that isn't natively supported convert itself.
+    # Prefer as_json (its result is re-emitted through the normal pipeline, so the
+    # escaping/format options still apply); fall back to to_json (spliced as-is, so
+    # ascii_only / script_safe do not reach inside it). Raise if it defines neither.
+    def emit_coerced(obj, buf, level)
+      if obj.respond_to?(:as_json)
+        emit(obj.as_json, buf, level)
+      elsif obj.respond_to?(:to_json)
+        buf << obj.to_json
+      else
+        raise SmarterJSON::GenerateError, "SmarterJSON.generate cannot serialize #{obj.class} (no as_json or to_json)"
       end
     end
 

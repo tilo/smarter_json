@@ -48,6 +48,7 @@ These options are passed to [`SmarterJSON.generate`](./basic_write_api.md) as th
 | `:sort_keys`    | `false` | Emit object keys in sorted order (Symbol keys sorted by their string form). Useful for canonical, diff-friendly output. |
 | `:ascii_only`   | `false` | Escape every non-ASCII character as `\uXXXX` (astral characters as a UTF-16 surrogate pair). The default emits raw UTF-8. |
 | `:script_safe`  | `false` | Escape the `/` in `</` and the JS line separators U+2028 / U+2029, so output is safe to embed in an HTML `<script>` tag. |
+| `:coerce`       | `false` | When `true`, a value that isn't natively supported is converted by its own `as_json` (the result is re-emitted, so the other options still apply) or, failing that, `to_json` (spliced verbatim). When `false` (the default), such a value raises `SmarterJSON::GenerateError`. |
 
 Any other `:format` value, a negative/non-Integer `:indent`, or combining `:indent` with `:ndjson`, raises `ArgumentError`.
 
@@ -58,6 +59,8 @@ SmarterJSON.generate({ "a" => 1 }, indent: 2)               # => "{\n  \"a\": 1\
 SmarterJSON.generate({ "b" => 2, "a" => 1 }, sort_keys: true) # => '{"a":1,"b":2}'
 SmarterJSON.generate("café", ascii_only: true)              # => '"caf\u00e9"'
 SmarterJSON.generate("</script>", script_safe: true)        # => '"<\/script>"'
+SmarterJSON.generate(model, coerce: true)                   # => uses model.as_json (else model.to_json)
+SmarterJSON.generate(model)                                 # raises SmarterJSON::GenerateError (coerce off)
 SmarterJSON.generate({}, format: :bogus)                    # raises ArgumentError
 ```
 
