@@ -22,7 +22,7 @@ Gem::Specification.new do |spec|
   spec.metadata["documentation_uri"] = "https://github.com/tilo/smarter_json#readme"
   spec.metadata["bug_tracker_uri"]   = "https://github.com/tilo/smarter_json/issues"
   # spec.metadata["allowed_push_host"] = "TODO: Set to your gem server 'https://example.com'"
-  spec.required_ruby_version = ">= 2.5.0"
+  spec.required_ruby_version = ">= 2.6.0"
 
   # Uncomment the line below to require MFA for gem pushes.
   # This helps protect your gem from supply chain attacks by ensuring

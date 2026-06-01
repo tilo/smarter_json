@@ -10,9 +10,9 @@ Most JSON parsers reject anything that isn't perfectly strict JSON. SmarterJSON 
 
 Three things set it apart:
 
-1. **One parser, no modes, no flags.** There is no `dialect:` option and no "strict mode" — `SmarterJSON.parse(input)` accepts the whole superset, and strict JSON is simply the narrowest case. You don't configure the parser to match your input; it adapts to whatever you give it.
+1. **One parser, no modes, no flags.** There is no `dialect:` option and no "strict mode" — `SmarterJSON.process(input)` accepts the whole superset, and strict JSON is simply the narrowest case. You don't configure the parser to match your input; it adapts to whatever you give it.
 
-2. **It parses multi-document input automatically — a distinguishing feature.** `SmarterJSON.parse` handles NDJSON / JSONL / concatenated JSON with **no block and no special method**: one document returns its value, several documents return an `Array`, empty input returns `nil`. **Only SmarterJSON parses multi-document input via plain `parse` — Oj and the stdlib `json` library raise without a block.** For input larger than memory, pass a block to stream one document at a time.
+2. **It parses multi-document input automatically — a distinguishing feature.** `SmarterJSON.process` handles NDJSON / JSONL / concatenated JSON with **no block and no special method**: one document returns its value, several documents return an `Array`, empty input returns `nil`. **Only SmarterJSON parses multi-document input via plain `process` — Oj and the stdlib `json` library raise without a block.** For input larger than memory, pass a block to stream one document at a time.
 
 3. **It's fast.** A C extension (with a pure-Ruby fallback that runs everywhere) puts it ahead of Oj on nearly every file we benchmark, and competitive with the stdlib `json` C parser — the fastest general-purpose Ruby JSON parser.
 
@@ -54,18 +54,18 @@ The C extension is built on install and used automatically. On platforms where i
 ```ruby
 require "smarter_json"
 
-SmarterJSON.parse('{"a": 1, "b": [2, 3]}')          # => {"a"=>1, "b"=>[2, 3]}
-SmarterJSON.parse("host: localhost\nport: 5432")     # => {"host"=>"localhost", "port"=>5432}  (no braces needed)
-SmarterJSON.parse_file("config.json5")               # read a file, then parse
+SmarterJSON.process('{"a": 1, "b": [2, 3]}')          # => {"a"=>1, "b"=>[2, 3]}
+SmarterJSON.process("host: localhost\nport: 5432")     # => {"host"=>"localhost", "port"=>5432}  (no braces needed)
+SmarterJSON.process_file("config.json5")               # read a file, then parse
 
 # Multiple documents (NDJSON / JSONL / concatenated) — no block, no special method:
-SmarterJSON.parse(%({"id":1}\n{"id":2}\n{"id":3}))   # => [{"id"=>1}, {"id"=>2}, {"id"=>3}]
-SmarterJSON.parse('{"id":1}')                         # => {"id"=>1}   (one document → the value itself)
-SmarterJSON.parse("")                                 # => nil          (zero documents)
+SmarterJSON.process(%({"id":1}\n{"id":2}\n{"id":3}))   # => [{"id"=>1}, {"id"=>2}, {"id"=>3}]
+SmarterJSON.process('{"id":1}')                         # => {"id"=>1}   (one document → the value itself)
+SmarterJSON.process("")                                 # => nil          (zero documents)
 
 # For input larger than memory, stream one document at a time with a block
-# (parse and parse_file both forward the block):
-SmarterJSON.parse_file("events.ndjson") { |event| EventJob.perform_async(event) }
+# (process and process_file both forward the block):
+SmarterJSON.process_file("events.ndjson") { |event| EventJob.perform_async(event) }
 ```
 
 ### Options
@@ -75,7 +75,7 @@ SmarterJSON.parse_file("events.ndjson") { |event| EventJob.perform_async(event) 
 | `symbolize_keys`  | `false`      | return object keys as Symbols instead of Strings                        |
 | `duplicate_key`   | `:last_wins` | `:last_wins` / `:first_wins` / `:raise` for repeated keys in one object |
 | `bigdecimal_load` | `:auto`      | `:auto` keeps high-precision decimals as `BigDecimal`; `:float` forces `Float`; `:bigdecimal` forces `BigDecimal` |
-| `acceleration`    | `:auto`      | `:auto` uses the C extension when available; `false` forces pure Ruby   |
+| `acceleration`    | `true`       | `true` uses the C extension when compiled and loadable; `false` forces pure Ruby (identical results) |
 | `encoding`        | `"UTF-8"`    | labels the input's encoding (no transcoding pass; see below)            |
 
 ## Performance
@@ -88,7 +88,7 @@ Benchmarks: p10 of 40 runs, Apple M1 Max, Ruby 3.4.7, on the standard JSON corpu
 
 **Two notes on fair comparison:**
 
-- **NDJSON:** on multi-document files, **only SmarterJSON parses the input via plain `parse`** — Oj and `json` raise without a block, so their cells are `N/A`. That `N/A` reflects real default behavior, not a measurement gap. Plain `parse` collects every document into an Array at ~270 MB/s; the streaming block form runs faster (~440 MB/s) because it doesn't hold all documents in memory at once — use it for input larger than RAM.
+- **NDJSON:** on multi-document files, **only SmarterJSON parses the input via plain `process`** — Oj and `json` raise without a block, so their cells are `N/A`. That `N/A` reflects real default behavior, not a measurement gap. Plain `process` collects every document into an Array at ~270 MB/s; the streaming block form runs faster (~440 MB/s) because it doesn't hold all documents in memory at once — use it for input larger than RAM.
 - **High-precision decimals (e.g. `canada.json`):** SmarterJSON's default `:auto` mode preserves high-precision numbers as `BigDecimal` (matching Oj's default), which is intrinsically slower than `Float`. Against `Float`-producing parsers it looks slower on such files; pass `bigdecimal_load: :float` to compare like-for-like (it then runs much faster). Against the equivalent `BigDecimal`-producing Oj mode, SmarterJSON is faster.
 
 ## Encoding
