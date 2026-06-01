@@ -1,6 +1,9 @@
 
 # SmarterJSON Change Log
 
+## unreleased
+- `generate` now supports pretty-printing via the `indent:` option (spaces per nesting level; default `0` = compact). Empty objects/arrays stay inline; `indent:` combined with `format: :ndjson` raises `ArgumentError`.
+
 ## 0.5.1 (2026-06-01)
 - Unified the error classes under a single `SmarterJSON::Error` base: `ParseError` and `EncodingError` now inherit from it, and `generate` raises a new `GenerateError`. `rescue SmarterJSON::Error` now catches everything the gem raises.
 - Added a CI test matrix (Ruby 2.6–4.0 + head, on Ubuntu and macOS).

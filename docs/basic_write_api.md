@@ -53,12 +53,35 @@ Strings escape `"`, `\`, and the control characters `0x00–0x1F`; everything el
 `generate` raises `SmarterJSON::Error` on input it cannot represent as strict JSON:
 
 ```ruby
-SmarterJSON.generate(Time.now)          # raises SmarterJSON::Error — unsupported type
-SmarterJSON.generate(Float::INFINITY)   # raises SmarterJSON::Error — non-finite Float
-SmarterJSON.generate(Float::NAN)        # raises SmarterJSON::Error — non-finite Float
+SmarterJSON.generate(Time.now)          # raises SmarterJSON::GenerateError — unsupported type
+SmarterJSON.generate(Float::INFINITY)   # raises SmarterJSON::GenerateError — non-finite Float
+SmarterJSON.generate(Float::NAN)        # raises SmarterJSON::GenerateError — non-finite Float
 ```
 
-(`Infinity` and `NaN` are accepted on the *read* side as a leniency, but they are not valid JSON to *write*.)
+(`GenerateError` is a kind of `SmarterJSON::Error`, so `rescue SmarterJSON::Error` catches it. `Infinity` and `NaN` are accepted on the *read* side as a leniency, but they are not valid JSON to *write*.)
+
+## Pretty-printing
+
+By default `generate` produces compact output (no spaces). Pass `indent:` (a number of spaces per nesting level) to pretty-print:
+
+```ruby
+SmarterJSON.generate({ "a" => 1, "b" => [2, 3] }, indent: 2)
+# => "{\n  \"a\": 1,\n  \"b\": [\n    2,\n    3\n  ]\n}"
+```
+
+which prints as:
+
+```json
+{
+  "a": 1,
+  "b": [
+    2,
+    3
+  ]
+}
+```
+
+Empty objects and arrays stay inline (`{}` / `[]`) even when indenting. `indent: 0` (the default) is compact output. Pretty-printing is multi-line, so it can't be combined with `format: :ndjson` (where each record must be a single line) — doing so raises `ArgumentError`. See [Configuration Options](./options.md).
 
 ## Writing NDJSON
 

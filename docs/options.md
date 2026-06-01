@@ -39,17 +39,19 @@ The default `:auto` preserves high-precision numbers as `BigDecimal`, matching O
 
 ## Writing
 
-This option is passed to [`SmarterJSON.generate`](./basic_write_api.md) as the second argument.
+These options are passed to [`SmarterJSON.generate`](./basic_write_api.md) as the second argument.
 
 | Option     | Default | Explanation                                                                                                                |
 |------------|---------|-----------------------------------------------------------------------------------------------------------------------------|
 | `:format`  | `:json` | `:json` writes standard JSON (Hash → object, Array → array, scalar → scalar). `:ndjson` writes newline-delimited JSON: an Array becomes one element per line, any other value becomes a single line. |
+| `:indent`  | `0`     | Spaces per nesting level for pretty-printing. `0` (the default) is compact output. Empty objects/arrays stay inline. Not allowed with `:ndjson` (a record must be a single line). |
 
-Any other `:format` value raises `ArgumentError`.
+Any other `:format` value, a negative/non-Integer `:indent`, or combining `:indent` with `:ndjson`, raises `ArgumentError`.
 
 ```ruby
 SmarterJSON.generate([1, 2, 3])                          # => "[1,2,3]"   (default :json — a single JSON array)
 SmarterJSON.generate([1, 2, 3], format: :ndjson)         # => "1\n2\n3\n" (one element per line)
+SmarterJSON.generate({ "a" => 1 }, indent: 2)            # => "{\n  \"a\": 1\n}"  (pretty-printed)
 SmarterJSON.generate({}, format: :bogus)                 # raises ArgumentError
 ```
 

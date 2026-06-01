@@ -82,9 +82,85 @@ RSpec.describe "SmarterJSON.generate" do
     end
   end
 
+  describe "indent: pretty-printing" do
+    it "indents an object by the given number of spaces" do
+      expect(SmarterJSON.generate({ "a" => 1, "b" => 2 }, indent: 2)).to eq(<<~JSON.chomp)
+        {
+          "a": 1,
+          "b": 2
+        }
+      JSON
+    end
+
+    it "indents an array by the given number of spaces" do
+      expect(SmarterJSON.generate([1, 2, 3], indent: 2)).to eq(<<~JSON.chomp)
+        [
+          1,
+          2,
+          3
+        ]
+      JSON
+    end
+
+    it "indents nested objects and arrays, deepening per level" do
+      expect(SmarterJSON.generate({ "a" => [1, { "b" => 2 }] }, indent: 2)).to eq(<<~JSON.chomp)
+        {
+          "a": [
+            1,
+            {
+              "b": 2
+            }
+          ]
+        }
+      JSON
+    end
+
+    it "puts a space after the colon in objects (pretty mode)" do
+      expect(SmarterJSON.generate({ "a" => 1 }, indent: 2)).to include('"a": 1')
+    end
+
+    it "keeps empty array and object inline" do
+      expect(SmarterJSON.generate([], indent: 2)).to eq("[]")
+      expect(SmarterJSON.generate({}, indent: 2)).to eq("{}")
+      expect(SmarterJSON.generate({ "a" => [], "b" => {} }, indent: 2)).to eq(<<~JSON.chomp)
+        {
+          "a": [],
+          "b": {}
+        }
+      JSON
+    end
+
+    it "honors a different indent width" do
+      expect(SmarterJSON.generate({ "a" => 1 }, indent: 4)).to eq(<<~JSON.chomp)
+        {
+            "a": 1
+        }
+      JSON
+    end
+
+    it "indent: 0 (the default) is unchanged compact output" do
+      expect(SmarterJSON.generate({ "a" => [1, 2] }, indent: 0)).to eq('{"a":[1,2]}')
+      expect(SmarterJSON.generate({ "a" => [1, 2] })).to eq('{"a":[1,2]}')
+    end
+
+    it "round-trips: process(generate(obj, indent: 2)) == obj" do
+      obj = { "a" => 1, "b" => [2, "three", nil, true], "c" => { "d" => -4.5 } }
+      expect(SmarterJSON.process(SmarterJSON.generate(obj, indent: 2))).to eq(obj)
+    end
+  end
+
   describe "errors" do
     it "raises ArgumentError on an unknown writer format" do
       expect { SmarterJSON.generate({}, format: :bogus) }.to raise_error(ArgumentError, /format/)
+    end
+
+    it "raises ArgumentError on a negative or non-Integer indent" do
+      expect { SmarterJSON.generate({}, indent: -1) }.to raise_error(ArgumentError, /indent/)
+      expect { SmarterJSON.generate({}, indent: "2") }.to raise_error(ArgumentError, /indent/)
+    end
+
+    it "raises ArgumentError when indent is combined with format: :ndjson" do
+      expect { SmarterJSON.generate([1, 2], format: :ndjson, indent: 2) }.to raise_error(ArgumentError, /ndjson/)
     end
   end
 end

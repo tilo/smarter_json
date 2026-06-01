@@ -14,9 +14,13 @@ module SmarterJSON
   #                       line; any other value writes as a single line. The
   #                       inverse of process reading NDJSON back into an Array.
   #
+  # options[:indent]: spaces per nesting level for pretty-printing (Integer, default
+  #   0 = compact). Empty objects/arrays stay inline. Not allowed with :ndjson (a
+  #   record must be a single line) — combining them raises ArgumentError.
+  #
   # Symbol keys/values are emitted as strings; BigDecimal as a JSON number.
   # Unsupported types (Time, custom objects) and non-finite Floats raise
-  # SmarterJSON::Error. Returns a String.
+  # SmarterJSON::GenerateError. Returns a String.
   def generate(obj, options = {})
     Generator.new(options).generate(obj)
   end
@@ -35,6 +39,16 @@ module SmarterJSON
       unless %i[json ndjson].include?(@format)
         raise ArgumentError, "unknown writer format: #{@format.inspect} (expected :json or :ndjson)"
       end
+
+      @indent = options.fetch(:indent, 0) # spaces per nesting level; 0 = compact (default)
+      unless @indent.is_a?(Integer) && @indent >= 0
+        raise ArgumentError, "indent must be a non-negative Integer, got #{@indent.inspect}"
+      end
+      if @indent > 0 && @format == :ndjson
+        raise ArgumentError, "indent is not compatible with format: :ndjson (each record must be a single line)"
+      end
+
+      @pretty = @indent > 0
     end
 
     def generate(obj)
@@ -57,7 +71,7 @@ module SmarterJSON
 
     private
 
-    def emit(obj, buf)
+    def emit(obj, buf, level = 0)
       case obj
       when nil        then buf << "null"
       when true       then buf << "true"
@@ -67,33 +81,63 @@ module SmarterJSON
       when Integer    then buf << obj.to_s
       when Float      then emit_float(obj, buf)
       when BigDecimal then emit_bigdecimal(obj, buf)
-      when Array      then emit_array(obj, buf)
-      when Hash       then emit_hash(obj, buf)
+      when Array      then emit_array(obj, buf, level)
+      when Hash       then emit_hash(obj, buf, level)
       else
         raise SmarterJSON::GenerateError, "SmarterJSON.generate cannot serialize #{obj.class}"
       end
     end
 
-    def emit_array(arr, buf)
-      buf << "["
-      arr.each_with_index do |v, i|
-        buf << "," unless i.zero?
-        emit(v, buf)
+    def emit_array(arr, buf, level)
+      return buf << "[]" if arr.empty? # empty stays inline, even in pretty mode
+
+      if @pretty
+        pad = " " * (@indent * (level + 1))
+        buf << "[\n"
+        arr.each_with_index do |v, i|
+          buf << ",\n" unless i.zero?
+          buf << pad
+          emit(v, buf, level + 1)
+        end
+        buf << "\n" << (" " * (@indent * level)) << "]"
+      else
+        buf << "["
+        arr.each_with_index do |v, i|
+          buf << "," unless i.zero?
+          emit(v, buf, level)
+        end
+        buf << "]"
       end
-      buf << "]"
     end
 
-    def emit_hash(hash, buf)
-      buf << "{"
-      first = true
-      hash.each do |k, v|
-        buf << "," unless first
-        first = false
-        emit_string(k.is_a?(String) ? k : k.to_s, buf) # Symbol/other keys -> string
-        buf << ":"
-        emit(v, buf)
+    def emit_hash(hash, buf, level)
+      return buf << "{}" if hash.empty? # empty stays inline, even in pretty mode
+
+      if @pretty
+        pad = " " * (@indent * (level + 1))
+        buf << "{\n"
+        first = true
+        hash.each do |k, v|
+          buf << ",\n" unless first
+          first = false
+          buf << pad
+          emit_string(k.is_a?(String) ? k : k.to_s, buf) # Symbol/other keys -> string
+          buf << ": "
+          emit(v, buf, level + 1)
+        end
+        buf << "\n" << (" " * (@indent * level)) << "}"
+      else
+        buf << "{"
+        first = true
+        hash.each do |k, v|
+          buf << "," unless first
+          first = false
+          emit_string(k.is_a?(String) ? k : k.to_s, buf) # Symbol/other keys -> string
+          buf << ":"
+          emit(v, buf, level)
+        end
+        buf << "}"
       end
-      buf << "}"
     end
 
     def emit_string(str, buf)
