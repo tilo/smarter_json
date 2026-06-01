@@ -1,16 +1,17 @@
 
 # SmarterJSON Change Log
 
-## 0.5.1 (2026-05-31 unreleased)
-- error classes
-- test matric setup
+## 0.5.1 (2026-06-01)
+- Unified the error classes under a single `SmarterJSON::Error` base: `ParseError` and `EncodingError` now inherit from it, and `generate` raises a new `GenerateError`. `rescue SmarterJSON::Error` now catches everything the gem raises.
+- Added a CI test matrix (Ruby 2.6–4.0 + head, on Ubuntu and macOS).
+- Fixed the C extension build on Ruby 2.6 (declare `rb_hash_bulk_insert`, which 2.6 exports but does not declare in its headers); set the minimum Ruby to 2.6.
 
 ## 0.5.0 (2026-05-31 unreleased)
 - add JSON generation, incl. NDJSON generation
 - add test coverage
 
 ## 0.4.0 (2026-05-31 unreleased)
-- rename `smarter_json` -> `smarter_json`
+- rename `flex_json` -> `smarter_json`
 
 ## 0.3.10 (2026-05-31 unreleased)
 - change interface to use `.process` and `.process_file`

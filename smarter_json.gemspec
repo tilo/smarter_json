@@ -17,7 +17,7 @@ Gem::Specification.new do |spec|
   spec.homepage = "https://github.com/tilo/smarter_json"
 
   spec.metadata["homepage_uri"]      = spec.homepage
-  spec.metadata["source_code_uri"]   = spec.homepage
+  spec.metadata["source_code_uri"]   = "#{spec.homepage}/tree/main"
   spec.metadata["changelog_uri"]     = "https://github.com/tilo/smarter_json/blob/main/CHANGELOG.md"
   spec.metadata["documentation_uri"] = "https://github.com/tilo/smarter_json#readme"
   spec.metadata["bug_tracker_uri"]   = "https://github.com/tilo/smarter_json/issues"
