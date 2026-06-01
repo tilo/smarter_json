@@ -1,4 +1,4 @@
-#include "flex_json.h"
+#include "smarter_json.h"
 #include <math.h>
 #include <string.h>
 #ifdef __ARM_NEON
@@ -19,17 +19,17 @@
 #endif
 
 /*
- * flex_json C extension — self-contained parser (no callbacks into Ruby parse
- * logic). One entry point, FlexJSON.parse_c (made private on the Ruby side).
+ * smarter_json C extension — self-contained parser (no callbacks into Ruby parse
+ * logic). One entry point, SmarterJSON.parse_c (made private on the Ruby side).
  *
  * Covers strict JSON, JSON5, and the HJSON-inspired layer (quoteless strings
  * with recognized-literals-win classification, triple-quoted strings, implicit
- * root object, newline-as-separator, broader unquoted keys). The flex_json
+ * root object, newline-as-separator, broader unquoted keys). The smarter_json
  * layer (smart quotes, Python literals, Unicode whitespace) is pure-Ruby only
  * for now; those acceleration:true parity specs stay red until ported here.
  */
 
-static VALUE mFlexJSON;
+static VALUE mSmarterJSON;
 static VALUE cParseError;
 static VALUE cEncodingError;
 static ID    fj_bigdecimal_id; /* cached BigDecimal() method id (set in Init) */
@@ -75,14 +75,14 @@ static void fj_line_col(fj_state *st, long *line, long *col) {
 }
 
 /* 1-based column of the current byte position (bytes since the last line start).
- * Used for triple-quoted indentation stripping (flex_json.md §2.3). */
+ * Used for triple-quoted indentation stripping (smarter_json.md §2.3). */
 static long fj_column(fj_state *st) {
   long c = 1, i = st->pos - 1;
   while (i >= 0 && st->buf[i] != 0x0A && st->buf[i] != 0x0D) { c++; i--; }
   return c;
 }
 
-/* Construct FlexJSON::ParseError(message, line, col) and raise it. */
+/* Construct SmarterJSON::ParseError(message, line, col) and raise it. */
 NORETURN(static void fj_error(fj_state *st, const char *msg));
 static void fj_error(fj_state *st, const char *msg) {
   long line, col;
@@ -115,7 +115,7 @@ static void fj_advance(fj_state *st, long n) {
 static int fj_is_ws(int b) { return b == 0x20 || (b >= 0x09 && b <= 0x0D); }
 
 /* Length (1..3) of the Unicode whitespace char starting at p (n bytes
- * available), or 0. Matches Ruby's [[:space:]]; see flex_json.md §4.7.
+ * available), or 0. Matches Ruby's [[:space:]]; see smarter_json.md §4.7.
  * Reject-gate: only C2/E1/E2/E3 can begin a whitespace char. */
 static long fj_mbws(const char *p, long n) {
   int b0, b1, b2;
@@ -380,7 +380,7 @@ static long fj_sig_digits(const char *p, long n) {
 }
 
 /* A decimal token can go straight to BigDecimal() unchanged unless it has an
- * underscore (flex_json leniency) or a dot that BigDecimal() rejects: a leading
+ * underscore (smarter_json leniency) or a dot that BigDecimal() rejects: a leading
  * dot (".5") or a dot not followed by a digit ("5.", "5.e3"). */
 static int fj_decimal_is_clean(const char *p, long n) {
   long i = 0;
@@ -1184,7 +1184,7 @@ static size_t fj_pstack_memsize(const void *p) {
   return sizeof(fj_pstack) + (size_t)ps->vcapa * sizeof(VALUE) + (size_t)ps->fcapa * sizeof(fj_frame);
 }
 static const rb_data_type_t fj_pstack_type = {
-  "flex_json/pstack",
+  "smarter_json/pstack",
   { fj_pstack_mark, fj_pstack_free, fj_pstack_memsize, },
   0, 0, RUBY_TYPED_FREE_IMMEDIATELY,
 };
@@ -1399,12 +1399,12 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
   }
 }
 
-void Init_flex_json(void) {
-  mFlexJSON = rb_define_module("FlexJSON");
-  cParseError = rb_const_get(mFlexJSON, rb_intern("ParseError"));
-  cEncodingError = rb_const_get(mFlexJSON, rb_intern("EncodingError"));
+void Init_smarter_json(void) {
+  mSmarterJSON = rb_define_module("SmarterJSON");
+  cParseError = rb_const_get(mSmarterJSON, rb_intern("ParseError"));
+  cEncodingError = rb_const_get(mSmarterJSON, rb_intern("EncodingError"));
   fj_bigdecimal_id = rb_intern("BigDecimal");
   fj_to_sym_id = rb_intern("to_sym");
   fj_key_p_id = rb_intern("key?");
-  rb_define_module_function(mFlexJSON, "parse_c", fj_parse_c, 2);
+  rb_define_module_function(mSmarterJSON, "parse_c", fj_parse_c, 2);
 }

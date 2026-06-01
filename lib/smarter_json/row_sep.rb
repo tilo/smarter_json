@@ -3,7 +3,7 @@
 # Utility: Auto-detect line ending/row separator (CR, LF, CRLF) for arbitrary input.
 # Adapted from smarter_csv, but only line ending part used here (not column).
 
-module FlexJSON
+module SmarterJSON
   module RowSep
     # Given a String or IO (which responds to #each_char), return the most common line ending
     # Will return one of "\r\n", "\n", or "\r", or nil if not found.

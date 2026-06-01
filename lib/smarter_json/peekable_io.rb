@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module FlexJSON
+module SmarterJSON
   # Ported 1:1 from SmarterCSV - see smarter_csv/lib/smarter_csv/peekable_io.rb
   class PeekableIO
     DEFAULT_PEEK_SIZE = 16_384

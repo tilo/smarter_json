@@ -2,7 +2,7 @@
 
 source "https://rubygems.org"
 
-# Specify your gem's dependencies in flex_json.gemspec
+# Specify your gem's dependencies in smarter_json.gemspec
 gemspec
 
 # irb is part of stdlib (optional, useful for development/console)

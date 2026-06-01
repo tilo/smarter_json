@@ -2,20 +2,20 @@
 
 require "bigdecimal" # for bigdecimal_load: :auto / :bigdecimal (Oj-compatible)
 
-require_relative "flex_json/version"
-require_relative "flex_json/row_sep"
-require_relative "flex_json/peekable_io"
-require_relative "flex_json/parser"
+require_relative "smarter_json/version"
+require_relative "smarter_json/row_sep"
+require_relative "smarter_json/peekable_io"
+require_relative "smarter_json/parser"
 
-# Optional C extension. When compiled and loadable it defines FlexJSON.parse_c;
+# Optional C extension. When compiled and loadable it defines SmarterJSON.parse_c;
 # otherwise we run pure Ruby. (Mirrors smarter_csv's load-with-rescue pattern.)
 begin
-  require_relative "flex_json/flex_json"
+  require_relative "smarter_json/smarter_json"
 rescue LoadError
   # pure-Ruby fallback — no acceleration available
 end
 
-module FlexJSON
+module SmarterJSON
   class Error < StandardError; end
 
   HAS_ACCELERATION = respond_to?(:parse_c)

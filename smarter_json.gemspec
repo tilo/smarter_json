@@ -1,27 +1,26 @@
 # frozen_string_literal: true
 
-require_relative "lib/flex_json/version"
+require_relative "lib/smarter_json/version"
 
 Gem::Specification.new do |spec|
-  spec.name          = "flex_json"
+  spec.name          = "smarter_json"
   spec.authors       = ["Tilo Sloboda"]
   spec.email         = ["tilo.sloboda@gmail.com"]
-  spec.version       = FlexJSON::VERSION
+  spec.version       = SmarterJSON::VERSION
   spec.date          = Time.now.utc.strftime('%Y-%m-%d')
   spec.license       = 'MIT'
-
-  spec.summary = "Lenient, robust, and extensible JSON/JSON5 parser for Ruby. Accepts strict JSON and real-world variants."
+  spec.summary = 'SmarterJSON: A lenient, robust, streaming JSON parser for Ruby supporting JSON, JSON5, NDJSON, and HJSON-style input.'
   spec.description = <<~DESC
-    FlexJSON is a permissive JSON/JSON5 parser: comments, trailing commas, different quote styles, Python/JS keywords, and more, all parse to the same Ruby objects. Purposely no strict mode, always best-effort, blazing fast. Handles BOM, smart quotes, messy input. Compatible with config/data files and API responses alike.
+    SmarterJSON is a permissive JSON/JSON5 parser: comments, trailing commas, different quote styles, Python/JS keywords, and more, all parse to the same Ruby objects. Purposely no strict mode, always best-effort, blazing fast. Handles BOM, smart quotes, messy input. Compatible with config/data files and API responses alike.
   DESC
 
-  spec.homepage = "https://github.com/tilo/flex_json"
+  spec.homepage = "https://github.com/tilo/smarter_json"
 
   spec.metadata["homepage_uri"]      = spec.homepage
   spec.metadata["source_code_uri"]   = spec.homepage
-  spec.metadata["changelog_uri"]     = "https://github.com/tilo/flex_json/blob/main/CHANGELOG.md"
-  spec.metadata["documentation_uri"] = "https://github.com/tilo/flex_json#readme"
-  spec.metadata["bug_tracker_uri"]   = "https://github.com/tilo/flex_json/issues"
+  spec.metadata["changelog_uri"]     = "https://github.com/tilo/smarter_json/blob/main/CHANGELOG.md"
+  spec.metadata["documentation_uri"] = "https://github.com/tilo/smarter_json#readme"
+  spec.metadata["bug_tracker_uri"]   = "https://github.com/tilo/smarter_json/issues"
   # spec.metadata["allowed_push_host"] = "TODO: Set to your gem server 'https://example.com'"
   spec.required_ruby_version = ">= 2.5.0"
 
@@ -43,7 +42,7 @@ Gem::Specification.new do |spec|
   spec.bindir = "exe"
   spec.executables = spec.files.grep(%r{\Aexe/}) { |f| File.basename(f) }
   spec.require_paths = ["lib"]
-  spec.extensions = ["ext/flex_json/extconf.rb"]
+  spec.extensions = ["ext/smarter_json/extconf.rb"]
 
   # bigdecimal is no longer a default gem on Ruby 3.4+; needed for
   # bigdecimal_load: :auto / :bigdecimal (Oj-compatible decimal loading).

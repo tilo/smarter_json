@@ -27,4 +27,4 @@ have_func("rb_enc_interned_str", "ruby.h")
 have_func("rb_hash_new_capa", "ruby.h")
 have_func("rb_hash_bulk_insert", "ruby.h")
 
-create_makefile("flex_json/flex_json")
+create_makefile("smarter_json/smarter_json")

@@ -1,8 +1,8 @@
 
-# FlexJSON Change Log
+# SmarterJSON Change Log
 
 ## 0.4.0 (2026-05-31 unreleased)
-- rename `flex_json` -> `smarter_json`
+- rename `smarter_json` -> `smarter_json`
 
 
 ## 0.3.10 (2026-05-31 unreleased)

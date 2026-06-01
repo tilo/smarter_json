@@ -3,7 +3,7 @@
 require "simplecov"
 SimpleCov.start
 
-require "flex_json"
+require "smarter_json"
 
 RSpec.configure do |config|
   # Enable flags like --only-failures and --next-failure

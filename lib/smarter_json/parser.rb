@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module FlexJSON
+module SmarterJSON
   class ParseError < StandardError
     attr_reader :line, :col
 
@@ -15,7 +15,7 @@ module FlexJSON
 
   module_function
 
-  # FlexJSON.process(input, options = {}) — the main entry point.
+  # SmarterJSON.process(input, options = {}) — the main entry point.
   #
   # `input` is either a String of JSON content or an IO to read from. (A String
   # is always content, never a filename — use process_file for paths.) The values
@@ -24,7 +24,7 @@ module FlexJSON
   # Without a block: returns nil (zero documents), the value (one document), or an
   # Array of the values (two or more — NDJSON / JSONL / concatenated / whitespace-
   # separated). :acceleration (default true) selects the C extension when compiled
-  # and loaded (FlexJSON::HAS_ACCELERATION); otherwise the pure-Ruby parser.
+  # and loaded (SmarterJSON::HAS_ACCELERATION); otherwise the pure-Ruby parser.
   #
   # With a block: yields each top-level document as it is parsed, and returns nil.
   # For an IO this streams document-by-document in bounded memory — it reads the
@@ -35,11 +35,11 @@ module FlexJSON
     elsif input.respond_to?(:read)
       block ? stream_io(input, options, &block) : process_content(input.read, options)
     else
-      raise ArgumentError, "FlexJSON.process expects a String or an IO, got #{input.class}"
+      raise ArgumentError, "SmarterJSON.process expects a String or an IO, got #{input.class}"
     end
   end
 
-  # FlexJSON.process_file(path, options = {}) — open a file and process it.
+  # SmarterJSON.process_file(path, options = {}) — open a file and process it.
   #
   # The :encoding option labels the file's encoding (default "UTF-8"); it does NOT
   # trigger a transcoding pass — the parser works on the bytes in their native
@@ -91,9 +91,9 @@ module FlexJSON
   # Layer 3: HJSON-inspired additions — #/comment-marker rule, triple-quoted
   #          strings, quoteless single-line strings, implicit root object,
   #          newline-as-separator, broader unquoted keys, recognized-literals-win.
-  # Layer 4: flex_json additions — UTF-8 BOM skip, smart/curly quotes,
+  # Layer 4: smarter_json additions — UTF-8 BOM skip, smart/curly quotes,
   #          Python literals (True/False/None) and undefined, underscores in
-  #          numeric literals, and encoding validation (FlexJSON::EncodingError).
+  #          numeric literals, and encoding validation (SmarterJSON::EncodingError).
   class Parser
     LBRACE     = 0x7B
     RBRACE     = 0x7D
@@ -192,7 +192,7 @@ module FlexJSON
     end
 
     # Yield each top-level value until EOF (JSONL / NDJSON / concatenated /
-    # whitespace-separated). Used by the block form of FlexJSON.process.
+    # whitespace-separated). Used by the block form of SmarterJSON.process.
     def each_value
       loop do
         skip_whitespace_and_comments
@@ -367,7 +367,7 @@ module FlexJSON
       end
     end
 
-    # --- whitespace (Unicode [[:space:]] / Rails blank?; see flex_json.md §4.7) ---
+    # --- whitespace (Unicode [[:space:]] / Rails blank?; see smarter_json.md §4.7) ---
 
     def skip_pure_whitespace
       loop do
