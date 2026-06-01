@@ -1,5 +1,5 @@
 AllCops:
-  TargetRubyVersion: 2.5 # purposely an old Ruby version
+  TargetRubyVersion: 2.6 # matches required_ruby_version in the gemspec
 
 Layout/SpaceBeforeBlockBraces:
   Enabled: false
