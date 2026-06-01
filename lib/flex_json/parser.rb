@@ -15,17 +15,50 @@ module FlexJSON
 
   module_function
 
-  # One options hash; the values given override Parser::DEFAULT_OPTIONS.
+  # FlexJSON.process(input, options = {}) — the main entry point.
   #
-  # Without a block: parses exactly one top-level value and raises if any
-  # non-whitespace content follows it (no silent data loss). :acceleration
-  # (default true) selects the C extension when compiled and loaded
-  # (FlexJSON::HAS_ACCELERATION); otherwise the pure-Ruby parser.
+  # `input` is either a String of JSON content or an IO to read from. (A String
+  # is always content, never a filename — use process_file for paths.) The values
+  # in `options` override Parser::DEFAULT_OPTIONS.
   #
-  # With a block: yields each top-level value — JSONL / NDJSON, concatenated
-  # JSON, or whitespace-separated values — and returns nil. Uses the C extension
-  # too when available (it yields each value from C); pure-Ruby otherwise.
-  def parse(input, options = {}, &block)
+  # Without a block: returns nil (zero documents), the value (one document), or an
+  # Array of the values (two or more — NDJSON / JSONL / concatenated / whitespace-
+  # separated). :acceleration (default true) selects the C extension when compiled
+  # and loaded (FlexJSON::HAS_ACCELERATION); otherwise the pure-Ruby parser.
+  #
+  # With a block: yields each top-level document as it is parsed, and returns nil.
+  # For an IO this streams document-by-document in bounded memory — it reads the
+  # stream as newline-delimited documents (NDJSON / JSONL), one per line.
+  def process(input, options = {}, &block)
+    if input.is_a?(String)
+      process_content(input, options, &block)
+    elsif input.respond_to?(:read)
+      block ? stream_io(input, options, &block) : process_content(input.read, options)
+    else
+      raise ArgumentError, "FlexJSON.process expects a String or an IO, got #{input.class}"
+    end
+  end
+
+  # FlexJSON.process_file(path, options = {}) — open a file and process it.
+  #
+  # The :encoding option labels the file's encoding (default "UTF-8"); it does NOT
+  # trigger a transcoding pass — the parser works on the bytes in their native
+  # encoding and emits string values with the same encoding tag. With a block,
+  # streams document-by-document straight from disk in bounded memory (never
+  # loading the whole file); the documents are read as newline-delimited
+  # (NDJSON / JSONL), one per line.
+  def process_file(path, options = {}, &block)
+    encoding = options.fetch(:encoding, "UTF-8")
+    if block
+      File.open(path, "r:#{encoding}") { |io| stream_io(io, options, &block) }
+    else
+      process_content(File.read(path, encoding: encoding), options)
+    end
+  end
+
+  # Parse a String of JSON content (the in-memory path). Returns nil (block) or
+  # the value / Array (no block); the C extension is used when available.
+  def process_content(input, options, &block)
     if block
       if options.fetch(:acceleration, true) && HAS_ACCELERATION
         parse_c(input, options, &block)
@@ -39,14 +72,15 @@ module FlexJSON
     end
   end
 
-  # The :encoding option labels the input's encoding (default "UTF-8").
-  # It does NOT trigger a transcoding pass — the parser works on bytes in
-  # their native encoding and emits string values with the same tag.
-  def parse_file(path, options = {}, &block)
-    encoding = options.fetch(:encoding, "UTF-8")
-    input = File.read(path, encoding: encoding)
-    parse(input, options, &block)
+  # Stream documents from an IO, one line (= one document) at a time, yielding
+  # each — bounded memory. Newline-delimited (NDJSON / JSONL); a single document
+  # spanning multiple lines is not supported by the streaming path.
+  def stream_io(io, options, &block)
+    io.each_line("\n") { |line| process_content(line, options, &block) }
+    nil
   end
+
+  private_class_method :process_content, :stream_io
 
   # Hand-rolled FSM single-pass parser.
   # Layer 1: strict JSON (RFC 8259).
@@ -158,7 +192,7 @@ module FlexJSON
     end
 
     # Yield each top-level value until EOF (JSONL / NDJSON / concatenated /
-    # whitespace-separated). Used by the block form of FlexJSON.parse.
+    # whitespace-separated). Used by the block form of FlexJSON.process.
     def each_value
       loop do
         skip_whitespace_and_comments

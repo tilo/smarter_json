@@ -1,11 +1,12 @@
 # frozen_string_literal: true
 
 require "flex_json"
+require "stringio"
 
 RSpec.describe FlexJSON do
   # Parity harness: each example runs on the C path (acceleration: true) and the
   # pure-Ruby path (acceleration: false). The option is passed straight into the
-  # real FlexJSON.parse API — same pattern as smarter_csv's acceleration specs.
+  # real FlexJSON.process API — same pattern as smarter_csv's acceleration specs.
   [true, false].each do |acceleration|
     context "acceleration: #{acceleration}" do
       let(:fixtures_dir) { File.expand_path("fixtures", __dir__) }
@@ -17,122 +18,122 @@ RSpec.describe FlexJSON do
       describe "strict JSON (Layer 1)" do
         describe "literals" do
           it "parses true" do
-            expect(FlexJSON.parse("true", acceleration: acceleration)).to eq(true)
+            expect(FlexJSON.process("true", acceleration: acceleration)).to eq(true)
           end
 
           it "parses false" do
-            expect(FlexJSON.parse("false", acceleration: acceleration)).to eq(false)
+            expect(FlexJSON.process("false", acceleration: acceleration)).to eq(false)
           end
 
           it "parses null as nil" do
-            expect(FlexJSON.parse("null", acceleration: acceleration)).to be_nil
+            expect(FlexJSON.process("null", acceleration: acceleration)).to be_nil
           end
         end
 
         describe "numbers" do
           it "parses zero" do
-            expect(FlexJSON.parse("0", acceleration: acceleration)).to eq(0)
+            expect(FlexJSON.process("0", acceleration: acceleration)).to eq(0)
           end
 
           it "parses positive integer" do
-            expect(FlexJSON.parse("1234567890", acceleration: acceleration)).to eq(1_234_567_890)
+            expect(FlexJSON.process("1234567890", acceleration: acceleration)).to eq(1_234_567_890)
           end
 
           it "parses negative integer" do
-            expect(FlexJSON.parse("-42", acceleration: acceleration)).to eq(-42)
+            expect(FlexJSON.process("-42", acceleration: acceleration)).to eq(-42)
           end
 
           it "parses float" do
-            expect(FlexJSON.parse("-9876.543210", acceleration: acceleration)).to eq(-9876.543210)
+            expect(FlexJSON.process("-9876.543210", acceleration: acceleration)).to eq(-9876.543210)
           end
 
           it "parses scientific notation (lower e, negative exponent)" do
-            expect(FlexJSON.parse("0.123456789e-12", acceleration: acceleration)).to eq(0.123456789e-12)
+            expect(FlexJSON.process("0.123456789e-12", acceleration: acceleration)).to eq(0.123456789e-12)
           end
 
           it "parses scientific notation (upper E, explicit +)" do
-            expect(FlexJSON.parse("1.234567890E+34", acceleration: acceleration)).to eq(1.234567890E+34)
+            expect(FlexJSON.process("1.234567890E+34", acceleration: acceleration)).to eq(1.234567890E+34)
           end
 
           it "returns Infinity for numeric overflow (tentative §7.2)" do
-            expect(FlexJSON.parse("1e500", acceleration: acceleration)).to eq(Float::INFINITY)
+            expect(FlexJSON.process("1e500", acceleration: acceleration)).to eq(Float::INFINITY)
           end
         end
 
         describe "strings" do
           it "parses simple double-quoted string" do
-            expect(FlexJSON.parse('"hello"', acceleration: acceleration)).to eq("hello")
+            expect(FlexJSON.process('"hello"', acceleration: acceleration)).to eq("hello")
           end
 
           it "parses empty string" do
-            expect(FlexJSON.parse('""', acceleration: acceleration)).to eq("")
+            expect(FlexJSON.process('""', acceleration: acceleration)).to eq("")
           end
 
           it "parses string with escaped quote" do
-            expect(FlexJSON.parse('"\""', acceleration: acceleration)).to eq('"')
+            expect(FlexJSON.process('"\""', acceleration: acceleration)).to eq('"')
           end
 
           it "parses string with backslash escape" do
-            expect(FlexJSON.parse('"\\\\"', acceleration: acceleration)).to eq("\\")
+            expect(FlexJSON.process('"\\\\"', acceleration: acceleration)).to eq("\\")
           end
 
           it "parses string with control character escapes" do
-            expect(FlexJSON.parse('"\b\f\n\r\t"', acceleration: acceleration)).to eq("\b\f\n\r\t")
+            expect(FlexJSON.process('"\b\f\n\r\t"', acceleration: acceleration)).to eq("\b\f\n\r\t")
           end
 
           it "parses string with forward-slash escape" do
-            expect(FlexJSON.parse('"\/"', acceleration: acceleration)).to eq("/")
+            expect(FlexJSON.process('"\/"', acceleration: acceleration)).to eq("/")
           end
 
           it 'parses BMP \\uXXXX escape' do
-            expect(FlexJSON.parse('"A"', acceleration: acceleration)).to eq("A")
+            expect(FlexJSON.process('"A"', acceleration: acceleration)).to eq("A")
           end
 
           it 'parses surrogate pair \\uD83D\\uDE00 (😀)' do
-            expect(FlexJSON.parse('"😀"', acceleration: acceleration)).to eq("\u{1F600}")
+            expect(FlexJSON.process('"😀"', acceleration: acceleration)).to eq("\u{1F600}")
           end
         end
 
         describe "arrays" do
           it "parses empty array" do
-            expect(FlexJSON.parse("[]", acceleration: acceleration)).to eq([])
+            expect(FlexJSON.process("[]", acceleration: acceleration)).to eq([])
           end
 
           it "parses array of integers" do
-            expect(FlexJSON.parse("[1, 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
+            expect(FlexJSON.process("[1, 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
           end
 
           it "parses array of mixed types" do
-            expect(FlexJSON.parse('[1, "two", true, null]', acceleration: acceleration)).to eq([1, "two", true, nil])
+            expect(FlexJSON.process('[1, "two", true, null]', acceleration: acceleration)).to eq([1, "two", true, nil])
           end
 
           it "parses nested array" do
-            expect(FlexJSON.parse("[[1, 2], [3, 4]]", acceleration: acceleration)).to eq([[1, 2], [3, 4]])
+            expect(FlexJSON.process("[[1, 2], [3, 4]]", acceleration: acceleration)).to eq([[1, 2], [3, 4]])
           end
         end
 
         describe "objects" do
           it "parses empty object" do
-            expect(FlexJSON.parse("{}", acceleration: acceleration)).to eq({})
+            expect(FlexJSON.process("{}", acceleration: acceleration)).to eq({})
           end
 
           it "parses single-key object" do
-            expect(FlexJSON.parse('{"a": 1}', acceleration: acceleration)).to eq({ "a" => 1 })
+            expect(FlexJSON.process('{"a": 1}', acceleration: acceleration)).to eq({ "a" => 1 })
           end
 
           it "parses multi-key object" do
-            expect(FlexJSON.parse('{"a": 1, "b": 2}', acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(FlexJSON.process('{"a": 1, "b": 2}', acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
 
           it "parses nested object" do
-            expect(FlexJSON.parse('{"outer": {"inner": 42}}', acceleration: acceleration)).to eq({ "outer" => { "inner" => 42 } })
+            expect(FlexJSON.process('{"outer": {"inner": 42}}', acceleration: acceleration)).to eq({ "outer" => { "inner" => 42 } })
           end
         end
 
         describe "comprehensive fixture" do
           it "parses json_pass1.json end-to-end" do
             input = File.read(File.join(fixtures_dir, "json_pass1.json"))
-            result = FlexJSON.parse(input, acceleration: acceleration)
+            result = FlexJSON.process(input, acceleration: acceleration)
             expect(result).to be_a(Array)
             expect(result[0]).to eq("JSON Test Pattern pass1")
             expect(result[1]).to eq({ "object with 1 member" => ["array with 1 element"] })
@@ -157,109 +158,109 @@ RSpec.describe FlexJSON do
       describe "JSON5 additions (Layer 2)" do
         describe "// line comments" do
           it "accepts a line comment before a value" do
-            expect(FlexJSON.parse("// a comment\n42", acceleration: acceleration)).to eq(42)
+            expect(FlexJSON.process("// a comment\n42", acceleration: acceleration)).to eq(42)
           end
 
           it "accepts a line comment between object members" do
-            expect(FlexJSON.parse('{"a": 1, // mid-line comment' + "\n" + '"b": 2}', acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(FlexJSON.process('{"a": 1, // mid-line comment' + "\n" + '"b": 2}', acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
         end
 
         describe "/* */ block comments" do
           it "accepts a block comment before a value" do
-            expect(FlexJSON.parse("/* block comment */ 42", acceleration: acceleration)).to eq(42)
+            expect(FlexJSON.process("/* block comment */ 42", acceleration: acceleration)).to eq(42)
           end
 
           it "accepts a block comment inside an array" do
-            expect(FlexJSON.parse("[1, /* mid */ 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
+            expect(FlexJSON.process("[1, /* mid */ 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
           end
 
           it "accepts a multi-line block comment" do
-            expect(FlexJSON.parse("/*\nmulti\nline\n*/ 42", acceleration: acceleration)).to eq(42)
+            expect(FlexJSON.process("/*\nmulti\nline\n*/ 42", acceleration: acceleration)).to eq(42)
           end
         end
 
         describe "trailing comma" do
           it "accepts trailing comma in array" do
-            expect(FlexJSON.parse("[1, 2, 3,]", acceleration: acceleration)).to eq([1, 2, 3])
+            expect(FlexJSON.process("[1, 2, 3,]", acceleration: acceleration)).to eq([1, 2, 3])
           end
 
           it "accepts trailing comma in object" do
-            expect(FlexJSON.parse('{"a": 1, "b": 2,}', acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(FlexJSON.process('{"a": 1, "b": 2,}', acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
         end
 
         describe "unquoted keys (ECMAScript identifier names)" do
           it "accepts simple identifier key" do
-            expect(FlexJSON.parse("{foo: 1}", acceleration: acceleration)).to eq({ "foo" => 1 })
+            expect(FlexJSON.process("{foo: 1}", acceleration: acceleration)).to eq({ "foo" => 1 })
           end
 
           it "accepts identifier with underscore prefix" do
-            expect(FlexJSON.parse("{_bar: 2}", acceleration: acceleration)).to eq({ "_bar" => 2 })
+            expect(FlexJSON.process("{_bar: 2}", acceleration: acceleration)).to eq({ "_bar" => 2 })
           end
 
           it "accepts identifier with dollar sign" do
-            expect(FlexJSON.parse("{$baz: 3}", acceleration: acceleration)).to eq({ "$baz" => 3 })
+            expect(FlexJSON.process("{$baz: 3}", acceleration: acceleration)).to eq({ "$baz" => 3 })
           end
 
           it "accepts identifier with digits after first char" do
-            expect(FlexJSON.parse("{a1b2: 1}", acceleration: acceleration)).to eq({ "a1b2" => 1 })
+            expect(FlexJSON.process("{a1b2: 1}", acceleration: acceleration)).to eq({ "a1b2" => 1 })
           end
         end
 
         describe "single-quoted strings" do
           it "parses single-quoted string value" do
-            expect(FlexJSON.parse("{a: 'bar'}", acceleration: acceleration)).to eq({ "a" => "bar" })
+            expect(FlexJSON.process("{a: 'bar'}", acceleration: acceleration)).to eq({ "a" => "bar" })
           end
 
           it "parses single-quoted string with escaped single quote" do
-            expect(FlexJSON.parse("'it\\'s'", acceleration: acceleration)).to eq("it's")
+            expect(FlexJSON.process("'it\\'s'", acceleration: acceleration)).to eq("it's")
           end
         end
 
         describe "hex numbers" do
           it "parses 0xFF as 255" do
-            expect(FlexJSON.parse("0xFF", acceleration: acceleration)).to eq(255)
+            expect(FlexJSON.process("0xFF", acceleration: acceleration)).to eq(255)
           end
 
           it "parses negative hex number" do
-            expect(FlexJSON.parse("-0x10", acceleration: acceleration)).to eq(-16)
+            expect(FlexJSON.process("-0x10", acceleration: acceleration)).to eq(-16)
           end
         end
 
         describe "leading/trailing decimal points" do
           it "parses .5 as 0.5" do
-            expect(FlexJSON.parse(".5", acceleration: acceleration)).to eq(0.5)
+            expect(FlexJSON.process(".5", acceleration: acceleration)).to eq(0.5)
           end
 
           it "parses 5. as 5.0" do
-            expect(FlexJSON.parse("5.", acceleration: acceleration)).to eq(5.0)
+            expect(FlexJSON.process("5.", acceleration: acceleration)).to eq(5.0)
           end
         end
 
         describe "Infinity and NaN" do
           it "parses Infinity" do
-            expect(FlexJSON.parse("Infinity", acceleration: acceleration)).to eq(Float::INFINITY)
+            expect(FlexJSON.process("Infinity", acceleration: acceleration)).to eq(Float::INFINITY)
           end
 
           it "parses -Infinity" do
-            expect(FlexJSON.parse("-Infinity", acceleration: acceleration)).to eq(-Float::INFINITY)
+            expect(FlexJSON.process("-Infinity", acceleration: acceleration)).to eq(-Float::INFINITY)
           end
 
           it "parses NaN" do
-            expect(FlexJSON.parse("NaN", acceleration: acceleration)).to be_a(Float).and(be_nan)
+            expect(FlexJSON.process("NaN", acceleration: acceleration)).to be_a(Float).and(be_nan)
           end
         end
 
         describe "explicit + sign on numbers" do
           it "parses +5 as 5" do
-            expect(FlexJSON.parse("+5", acceleration: acceleration)).to eq(5)
+            expect(FlexJSON.process("+5", acceleration: acceleration)).to eq(5)
           end
         end
 
         describe 'multi-line strings via \\-continuation' do
           it "joins lines via backslash continuation" do
-            expect(FlexJSON.parse('"first\
+            expect(FlexJSON.process('"first\
 second"', acceleration: acceleration)).to eq("firstsecond")
           end
         end
@@ -272,243 +273,243 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       describe "HJSON-inspired additions (Layer 3)" do
         describe "# line comments" do
           it "accepts # comment before a value" do
-            expect(FlexJSON.parse("# comment\n42", acceleration: acceleration)).to eq(42)
+            expect(FlexJSON.process("# comment\n42", acceleration: acceleration)).to eq(42)
           end
 
           it "accepts # comment between object members" do
-            expect(FlexJSON.parse("{a: 1 # comment\nb: 2}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(FlexJSON.process("{a: 1 # comment\nb: 2}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
         end
 
         describe "comment-marker whitespace rule" do
           it "preserves URL with // (no whitespace before //)" do
-            expect(FlexJSON.parse("url: http://example.com", acceleration: acceleration)).to eq({ "url" => "http://example.com" })
+            expect(FlexJSON.process("url: http://example.com", acceleration: acceleration)).to eq({ "url" => "http://example.com" })
           end
 
           it "preserves identifier with mid-token #" do
-            expect(FlexJSON.parse("method: Klass#meth", acceleration: acceleration)).to eq({ "method" => "Klass#meth" })
+            expect(FlexJSON.process("method: Klass#meth", acceleration: acceleration)).to eq({ "method" => "Klass#meth" })
           end
 
           it "preserves email with mid-token #" do
-            expect(FlexJSON.parse("email: foo@bar#example.com", acceleration: acceleration)).to eq({ "email" => "foo@bar#example.com" })
+            expect(FlexJSON.process("email: foo@bar#example.com", acceleration: acceleration)).to eq({ "email" => "foo@bar#example.com" })
           end
 
           it "treats # after whitespace as a comment" do
-            expect(FlexJSON.parse("name: Tilo # this is a comment", acceleration: acceleration)).to eq({ "name" => "Tilo" })
+            expect(FlexJSON.process("name: Tilo # this is a comment", acceleration: acceleration)).to eq({ "name" => "Tilo" })
           end
 
           it "treats // after whitespace as a comment" do
-            expect(FlexJSON.parse("name: Tilo // this is a comment", acceleration: acceleration)).to eq({ "name" => "Tilo" })
+            expect(FlexJSON.process("name: Tilo // this is a comment", acceleration: acceleration)).to eq({ "name" => "Tilo" })
           end
 
           it "treats # at start of line as a comment" do
-            expect(FlexJSON.parse("# top-level comment\nname: Tilo", acceleration: acceleration)).to eq({ "name" => "Tilo" })
+            expect(FlexJSON.process("# top-level comment\nname: Tilo", acceleration: acceleration)).to eq({ "name" => "Tilo" })
           end
 
           it "preserves URL with full URL + trailing comment" do
-            expect(FlexJSON.parse("url: http://example.com/ # see this site", acceleration: acceleration)).to eq({ "url" => "http://example.com/" })
+            expect(FlexJSON.process("url: http://example.com/ # see this site", acceleration: acceleration)).to eq({ "url" => "http://example.com/" })
           end
 
           it "keeps /* as part of the token when not preceded by whitespace" do
-            expect(FlexJSON.parse("path: a/*b/c", acceleration: acceleration)).to eq({ "path" => "a/*b/c" })
+            expect(FlexJSON.process("path: a/*b/c", acceleration: acceleration)).to eq({ "path" => "a/*b/c" })
           end
 
           it "treats /* after whitespace as a block comment" do
-            expect(FlexJSON.parse("name: Tilo /* a comment */", acceleration: acceleration)).to eq({ "name" => "Tilo" })
+            expect(FlexJSON.process("name: Tilo /* a comment */", acceleration: acceleration)).to eq({ "name" => "Tilo" })
           end
         end
 
         describe "triple-quoted multi-line strings" do
           it "parses single-line triple-quoted string" do
-            expect(FlexJSON.parse("'''hello'''", acceleration: acceleration)).to eq("hello")
+            expect(FlexJSON.process("'''hello'''", acceleration: acceleration)).to eq("hello")
           end
 
           it "parses an empty triple-quoted string" do
-            expect(FlexJSON.parse("''''''", acceleration: acceleration)).to eq("")
+            expect(FlexJSON.process("''''''", acceleration: acceleration)).to eq("")
           end
 
           it "parses multi-line content at column 0 (no stripping)" do
-            expect(FlexJSON.parse("'''first\nsecond'''", acceleration: acceleration)).to eq("first\nsecond")
+            expect(FlexJSON.process("'''first\nsecond'''", acceleration: acceleration)).to eq("first\nsecond")
           end
 
           it "does not process escapes — backslashes and quotes are literal" do
-            expect(FlexJSON.parse("'''a \\ b \"q\" c'''", acceleration: acceleration)).to eq('a \\ b "q" c')
+            expect(FlexJSON.process("'''a \\ b \"q\" c'''", acceleration: acceleration)).to eq('a \\ b "q" c')
           end
 
           describe "indentation stripping (based on opening ''' marker column)" do
             it "marker alone on its line: strips structural indent, preserves surplus" do
               # opening ''' at column 4; content at 8/10/8 → keeps 4/6/4
               input = "    '''\n        first line\n          indented line\n        last line\n    '''"
-              expect(FlexJSON.parse(input, acceleration: acceleration)).to eq("    first line\n      indented line\n    last line")
+              expect(FlexJSON.process(input, acceleration: acceleration)).to eq("    first line\n      indented line\n    last line")
             end
 
             it "strips exactly to the marker column when content aligns with it" do
               # opening ''' at column 4; content also at 4 → fully stripped
               input = "    '''\n    first line\n      indented line\n    last line\n    '''"
-              expect(FlexJSON.parse(input, acceleration: acceleration)).to eq("first line\n  indented line\nlast line")
+              expect(FlexJSON.process(input, acceleration: acceleration)).to eq("first line\n  indented line\nlast line")
             end
 
             it "text on the opening line is taken verbatim, later lines stripped" do
               input = "    '''first line\n      indented line\n    last line'''"
-              expect(FlexJSON.parse(input, acceleration: acceleration)).to eq("first line\n  indented line\nlast line")
+              expect(FlexJSON.process(input, acceleration: acceleration)).to eq("first line\n  indented line\nlast line")
             end
 
             it "preserves a genuine blank line and the resulting trailing newline" do
               input = "    '''\n    first line\n    last line\n\n    '''"
-              expect(FlexJSON.parse(input, acceleration: acceleration)).to eq("first line\nlast line\n")
+              expect(FlexJSON.process(input, acceleration: acceleration)).to eq("first line\nlast line\n")
             end
 
             it "never strips into the text when a line has less indent than the marker" do
               # opening ''' at column 4; a content line has only 2 leading spaces
               input = "    '''\n  short\n        deep\n    '''"
-              expect(FlexJSON.parse(input, acceleration: acceleration)).to eq("short\n    deep")
+              expect(FlexJSON.process(input, acceleration: acceleration)).to eq("short\n    deep")
             end
 
             it 'normalizes CRLF line endings to \\n inside the content' do
               input = "    '''\r\n    a\r\n    b\r\n    '''"
-              expect(FlexJSON.parse(input, acceleration: acceleration)).to eq("a\nb")
+              expect(FlexJSON.process(input, acceleration: acceleration)).to eq("a\nb")
             end
           end
 
           it "raises on an unterminated triple-quoted string" do
-            expect { FlexJSON.parse("'''never closed", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError, /unterminated/)
+            expect { FlexJSON.process("'''never closed", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError, /unterminated/)
           end
         end
 
         describe "quoteless single-line strings" do
           it "parses simple quoteless string value" do
-            expect(FlexJSON.parse("name: Tilo", acceleration: acceleration)).to eq({ "name" => "Tilo" })
+            expect(FlexJSON.process("name: Tilo", acceleration: acceleration)).to eq({ "name" => "Tilo" })
           end
 
           it "trims surrounding whitespace from quoteless string" do
-            expect(FlexJSON.parse("text:    hello world   ", acceleration: acceleration)).to eq({ "text" => "hello world" })
+            expect(FlexJSON.process("text:    hello world   ", acceleration: acceleration)).to eq({ "text" => "hello world" })
           end
 
           it "treats backslashes inside quoteless strings as literal (no escape processing)" do
-            expect(FlexJSON.parse('text: a \ is just a \\', acceleration: acceleration).values.first).to eq('a \\ is just a \\')
+            expect(FlexJSON.process('text: a \ is just a \\', acceleration: acceleration).values.first).to eq('a \\ is just a \\')
           end
 
           it 'treats \\n inside a quoteless string as two literal characters' do
             # Ruby single-quoted source: the input is the 4 chars  a \ n b
-            expect(FlexJSON.parse('x: a\nb', acceleration: acceleration)).to eq({ "x" => 'a\nb' })
+            expect(FlexJSON.process('x: a\nb', acceleration: acceleration)).to eq({ "x" => 'a\nb' })
           end
 
           it "terminates a quoteless value at }" do
-            expect(FlexJSON.parse("{a: hello world}", acceleration: acceleration)).to eq({ "a" => "hello world" })
+            expect(FlexJSON.process("{a: hello world}", acceleration: acceleration)).to eq({ "a" => "hello world" })
           end
 
           it "terminates a quoteless value at ]" do
-            expect(FlexJSON.parse("[hello world]", acceleration: acceleration)).to eq(["hello world"])
+            expect(FlexJSON.process("[hello world]", acceleration: acceleration)).to eq(["hello world"])
           end
 
           it "treats a malformed number as a quoteless string (1.2.3)" do
-            expect(FlexJSON.parse("{version: 1.2.3}", acceleration: acceleration)).to eq({ "version" => "1.2.3" })
+            expect(FlexJSON.process("{version: 1.2.3}", acceleration: acceleration)).to eq({ "version" => "1.2.3" })
           end
 
           it "treats a digit-led non-number token as a quoteless string (12abc)" do
-            expect(FlexJSON.parse("{v: 12abc}", acceleration: acceleration)).to eq({ "v" => "12abc" })
+            expect(FlexJSON.process("{v: 12abc}", acceleration: acceleration)).to eq({ "v" => "12abc" })
           end
         end
 
         describe "leading-zero numbers fall through to quoteless strings" do
           it 'parses 0080 as the string "0080"' do
-            expect(FlexJSON.parse("port: 0080", acceleration: acceleration)).to eq({ "port" => "0080" })
+            expect(FlexJSON.process("port: 0080", acceleration: acceleration)).to eq({ "port" => "0080" })
           end
 
           it 'parses 00 as the string "00"' do
-            expect(FlexJSON.parse("n: 00", acceleration: acceleration)).to eq({ "n" => "00" })
+            expect(FlexJSON.process("n: 00", acceleration: acceleration)).to eq({ "n" => "00" })
           end
 
           it 'parses 02 as the string "02"' do
-            expect(FlexJSON.parse("n: 02", acceleration: acceleration)).to eq({ "n" => "02" })
+            expect(FlexJSON.process("n: 02", acceleration: acceleration)).to eq({ "n" => "02" })
           end
         end
 
         describe "implicit root object" do
           it "parses key: value at top level without outer {}" do
-            expect(FlexJSON.parse("host: localhost\nport: 5432", acceleration: acceleration)).to eq({ "host" => "localhost", "port" => 5432 })
+            expect(FlexJSON.process("host: localhost\nport: 5432", acceleration: acceleration)).to eq({ "host" => "localhost", "port" => 5432 })
           end
 
           it "parses nested object under implicit root" do
             input = "database:\n{\n  host: 127.0.0.1\n  port: 555\n}"
-            expect(FlexJSON.parse(input, acceleration: acceleration)).to eq({ "database" => { "host" => "127.0.0.1", "port" => 555 } })
+            expect(FlexJSON.process(input, acceleration: acceleration)).to eq({ "database" => { "host" => "127.0.0.1", "port" => 555 } })
           end
         end
 
         describe "newline as separator" do
           it "separates object members on newlines without commas" do
-            expect(FlexJSON.parse("{\n  a: 1\n  b: 2\n}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(FlexJSON.process("{\n  a: 1\n  b: 2\n}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
 
           it "separates array elements on newlines without commas" do
-            expect(FlexJSON.parse("[\n  1\n  2\n  3\n]", acceleration: acceleration)).to eq([1, 2, 3])
+            expect(FlexJSON.process("[\n  1\n  2\n  3\n]", acceleration: acceleration)).to eq([1, 2, 3])
           end
         end
 
         describe "broader unquoted keys" do
           it "accepts {_var3: 1}" do
-            expect(FlexJSON.parse("{_var3: 1}", acceleration: acceleration)).to eq({ "_var3" => 1 })
+            expect(FlexJSON.process("{_var3: 1}", acceleration: acceleration)).to eq({ "_var3" => 1 })
           end
 
           it "accepts {my-key: 1}" do
-            expect(FlexJSON.parse("{my-key: 1}", acceleration: acceleration)).to eq({ "my-key" => 1 })
+            expect(FlexJSON.process("{my-key: 1}", acceleration: acceleration)).to eq({ "my-key" => 1 })
           end
 
           it "accepts {user-id-42: 1}" do
-            expect(FlexJSON.parse("{user-id-42: 1}", acceleration: acceleration)).to eq({ "user-id-42" => 1 })
+            expect(FlexJSON.process("{user-id-42: 1}", acceleration: acceleration)).to eq({ "user-id-42" => 1 })
           end
 
           it "rejects key starting with a digit (123-foo)" do
-            expect { FlexJSON.parse("{123-foo: 1}", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
+            expect { FlexJSON.process("{123-foo: 1}", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
           end
         end
 
         describe "recognized literals win in quoteless context" do
           it "parses [1, 2, 3] as three integers" do
-            expect(FlexJSON.parse("[1, 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
+            expect(FlexJSON.process("[1, 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
           end
 
           it 'parses [1 2 3] as the single string "1 2 3"' do
-            expect(FlexJSON.parse("[1 2 3]", acceleration: acceleration)).to eq(["1 2 3"])
+            expect(FlexJSON.process("[1 2 3]", acceleration: acceleration)).to eq(["1 2 3"])
           end
 
           # Boundary cases for the container-number fast path: a number commits
           # only when it abuts a value terminator; anything else falls back to the
           # quoteless scanner, which must still produce the identical result.
           it "commits numbers that abut a delimiter (comma/bracket/brace/newline)" do
-            expect(FlexJSON.parse("[1,2,3]", acceleration: acceleration)).to eq([1, 2, 3])
-            expect(FlexJSON.parse('{"a":1,"b":2.5}', acceleration: acceleration)).to eq("a" => 1, "b" => 2.5)
-            expect(FlexJSON.parse("[1.5e3,-7]", acceleration: acceleration)).to eq([1500.0, -7])
-            expect(FlexJSON.parse("[\n1\n,\n2\n]", acceleration: acceleration)).to eq([1, 2])
+            expect(FlexJSON.process("[1,2,3]", acceleration: acceleration)).to eq([1, 2, 3])
+            expect(FlexJSON.process('{"a":1,"b":2.5}', acceleration: acceleration)).to eq("a" => 1, "b" => 2.5)
+            expect(FlexJSON.process("[1.5e3,-7]", acceleration: acceleration)).to eq([1500.0, -7])
+            expect(FlexJSON.process("[\n1\n,\n2\n]", acceleration: acceleration)).to eq([1, 2])
           end
 
           it "still parses numbers correctly when whitespace separates them from the delimiter" do
-            expect(FlexJSON.parse("[1 , 2]", acceleration: acceleration)).to eq([1, 2])
-            expect(FlexJSON.parse("[3 ]", acceleration: acceleration)).to eq([3])
-            expect(FlexJSON.parse('{"a": 1 }', acceleration: acceleration)).to eq("a" => 1)
+            expect(FlexJSON.process("[1 , 2]", acceleration: acceleration)).to eq([1, 2])
+            expect(FlexJSON.process("[3 ]", acceleration: acceleration)).to eq([3])
+            expect(FlexJSON.process('{"a": 1 }', acceleration: acceleration)).to eq("a" => 1)
           end
 
           it "falls back to string/hex/Infinity for digit-led non-plain-numbers in containers" do
-            expect(FlexJSON.parse("[0xFF]", acceleration: acceleration)).to eq([255])
-            expect(FlexJSON.parse("[-Infinity, 12]", acceleration: acceleration)).to eq([-Float::INFINITY, 12])
-            expect(FlexJSON.parse("[1.2.3]", acceleration: acceleration)).to eq(["1.2.3"])
-            expect(FlexJSON.parse("[1_000, 2_000]", acceleration: acceleration)).to eq([1000, 2000])
+            expect(FlexJSON.process("[0xFF]", acceleration: acceleration)).to eq([255])
+            expect(FlexJSON.process("[-Infinity, 12]", acceleration: acceleration)).to eq([-Float::INFINITY, 12])
+            expect(FlexJSON.process("[1.2.3]", acceleration: acceleration)).to eq(["1.2.3"])
+            expect(FlexJSON.process("[1_000, 2_000]", acceleration: acceleration)).to eq([1000, 2000])
           end
 
           it "parses [red green blue] as a single-element array with one string" do
-            expect(FlexJSON.parse("[red green blue]", acceleration: acceleration)).to eq(["red green blue"])
+            expect(FlexJSON.process("[red green blue]", acceleration: acceleration)).to eq(["red green blue"])
           end
 
           it "parses [red, green, blue] as three strings" do
-            expect(FlexJSON.parse("[red, green, blue]", acceleration: acceleration)).to eq(%w[red green blue])
+            expect(FlexJSON.process("[red, green, blue]", acceleration: acceleration)).to eq(%w[red green blue])
           end
 
           it "parses [true, false, null] as three literals" do
-            expect(FlexJSON.parse("[true, false, null]", acceleration: acceleration)).to eq([true, false, nil])
+            expect(FlexJSON.process("[true, false, null]", acceleration: acceleration)).to eq([true, false, nil])
           end
 
           it 'parses [true false] as the string "true false"' do
-            expect(FlexJSON.parse("[true false]", acceleration: acceleration)).to eq(["true false"])
+            expect(FlexJSON.process("[true false]", acceleration: acceleration)).to eq(["true false"])
           end
         end
       end
@@ -521,7 +522,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         describe "UTF-8 BOM" do
           it "strips UTF-8 BOM at start of input" do
             input = "\xEF\xBB\xBF{\"a\":1}".b.force_encoding("UTF-8")
-            expect(FlexJSON.parse(input, acceleration: acceleration)).to eq({ "a" => 1 })
+            expect(FlexJSON.process(input, acceleration: acceleration)).to eq({ "a" => 1 })
           end
         end
 
@@ -529,63 +530,63 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           it "accepts curly double quotes as regular double quotes" do
             # U+201C LEFT DOUBLE QUOTATION MARK, U+201D RIGHT DOUBLE QUOTATION MARK
             input = "{\"a\": \u201Chello\u201D}"
-            expect(FlexJSON.parse(input, acceleration: acceleration)).to eq({ "a" => "hello" })
+            expect(FlexJSON.process(input, acceleration: acceleration)).to eq({ "a" => "hello" })
           end
 
           it "accepts curly single quotes as regular single quotes" do
             # U+2018 LEFT SINGLE QUOTATION MARK, U+2019 RIGHT SINGLE QUOTATION MARK
             input = "{a: \u2018hello\u2019}"
-            expect(FlexJSON.parse(input, acceleration: acceleration)).to eq({ "a" => "hello" })
+            expect(FlexJSON.process(input, acceleration: acceleration)).to eq({ "a" => "hello" })
           end
         end
 
         describe "Python literals" do
           it "parses True as true" do
-            expect(FlexJSON.parse("True", acceleration: acceleration)).to eq(true)
+            expect(FlexJSON.process("True", acceleration: acceleration)).to eq(true)
           end
 
           it "parses False as false" do
-            expect(FlexJSON.parse("False", acceleration: acceleration)).to eq(false)
+            expect(FlexJSON.process("False", acceleration: acceleration)).to eq(false)
           end
 
           it "parses None as nil" do
-            expect(FlexJSON.parse("None", acceleration: acceleration)).to be_nil
+            expect(FlexJSON.process("None", acceleration: acceleration)).to be_nil
           end
         end
 
         describe "JavaScript undefined" do
           it "parses undefined as nil" do
-            expect(FlexJSON.parse("undefined", acceleration: acceleration)).to be_nil
+            expect(FlexJSON.process("undefined", acceleration: acceleration)).to be_nil
           end
         end
 
         describe "underscores in numeric literals" do
           it "parses 1_000_000 as 1000000" do
-            expect(FlexJSON.parse("1_000_000", acceleration: acceleration)).to eq(1_000_000)
+            expect(FlexJSON.process("1_000_000", acceleration: acceleration)).to eq(1_000_000)
           end
 
           it "parses 1_000.5 as 1000.5" do
-            expect(FlexJSON.parse("1_000.5", acceleration: acceleration)).to eq(1000.5)
+            expect(FlexJSON.process("1_000.5", acceleration: acceleration)).to eq(1000.5)
           end
         end
 
         describe "line ending normalization" do
           it "accepts CRLF line endings" do
-            expect(FlexJSON.parse("{\r\n  a: 1\r\n  b: 2\r\n}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(FlexJSON.process("{\r\n  a: 1\r\n  b: 2\r\n}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
 
           it "accepts CR-only line endings (classic Mac)" do
-            expect(FlexJSON.parse("{\r  a: 1\r  b: 2\r}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(FlexJSON.process("{\r  a: 1\r  b: 2\r}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
 
           it "accepts mixed line endings in one document" do
-            expect(FlexJSON.parse("{\n  a: 1\r\n  b: 2\r  c: 3\n}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2, "c" => 3 })
+            expect(FlexJSON.process("{\n  a: 1\r\n  b: 2\r  c: 3\n}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2, "c" => 3 })
           end
         end
 
         describe "duplicate keys" do
           it "last value wins by default" do
-            expect(FlexJSON.parse('{"dup": 1, "dup": 2}', acceleration: acceleration)["dup"]).to eq(2)
+            expect(FlexJSON.process('{"dup": 1, "dup": 2}', acceleration: acceleration)["dup"]).to eq(2)
           end
         end
       end
@@ -596,23 +597,23 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
       describe "top-level scalars" do
         it "parses bare integer at top level" do
-          expect(FlexJSON.parse("42", acceleration: acceleration)).to eq(42)
+          expect(FlexJSON.process("42", acceleration: acceleration)).to eq(42)
         end
 
         it "parses bare float at top level" do
-          expect(FlexJSON.parse("3.14", acceleration: acceleration)).to eq(3.14)
+          expect(FlexJSON.process("3.14", acceleration: acceleration)).to eq(3.14)
         end
 
         it "parses bare string at top level" do
-          expect(FlexJSON.parse('"hello"', acceleration: acceleration)).to eq("hello")
+          expect(FlexJSON.process('"hello"', acceleration: acceleration)).to eq("hello")
         end
 
         it "parses bare true at top level" do
-          expect(FlexJSON.parse("true", acceleration: acceleration)).to eq(true)
+          expect(FlexJSON.process("true", acceleration: acceleration)).to eq(true)
         end
 
         it "parses bare null at top level" do
-          expect(FlexJSON.parse("null", acceleration: acceleration)).to be_nil
+          expect(FlexJSON.process("null", acceleration: acceleration)).to be_nil
         end
       end
 
@@ -623,7 +624,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       describe "encoding handling" do
         it "preserves input string encoding (UTF-8)" do
           input = '{"name": "café"}'.dup.force_encoding("UTF-8")
-          result = FlexJSON.parse(input, acceleration: acceleration)
+          result = FlexJSON.process(input, acceleration: acceleration)
           expect(result["name"]).to eq("café")
           expect(result["name"].encoding).to eq(Encoding::UTF_8)
         end
@@ -631,14 +632,14 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         it "preserves Latin-1 input encoding without transcoding" do
           # "café" in Latin-1: 0x63 0x61 0x66 0xE9
           input = "{\"name\": \"caf\xE9\"}".b.force_encoding("ISO-8859-1")
-          result = FlexJSON.parse(input, acceleration: acceleration)
+          result = FlexJSON.process(input, acceleration: acceleration)
           expect(result["name"].encoding).to eq(Encoding::ISO_8859_1)
           expect(result["name"].bytes).to eq([0x63, 0x61, 0x66, 0xE9])
         end
 
         it "parse_file accepts :encoding option" do
           file = File.join(fixtures_dir, "json_pass1.json")
-          result = FlexJSON.parse_file(file, encoding: "UTF-8", acceleration: acceleration)
+          result = FlexJSON.process_file(file, encoding: "UTF-8", acceleration: acceleration)
           expect(result).to be_a(Array)
           expect(result[0]).to eq("JSON Test Pattern pass1")
         end
@@ -650,50 +651,50 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
       describe "error handling" do
         it "raises FlexJSON::ParseError on truly unparseable input" do
-          expect { FlexJSON.parse("this is not valid {json}", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
+          expect { FlexJSON.process("this is not valid {json}", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
         end
 
         it "raises FlexJSON::ParseError on unterminated string" do
-          expect { FlexJSON.parse('"unterminated', acceleration: acceleration) }.to raise_error(FlexJSON::ParseError, /unterminated string/)
+          expect { FlexJSON.process('"unterminated', acceleration: acceleration) }.to raise_error(FlexJSON::ParseError, /unterminated string/)
         end
 
         it "raises FlexJSON::ParseError on unterminated object" do
-          expect { FlexJSON.parse('{"a": 1', acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
+          expect { FlexJSON.process('{"a": 1', acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
         end
 
         it "raises FlexJSON::ParseError on unterminated array" do
-          expect { FlexJSON.parse("[1, 2, 3", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
+          expect { FlexJSON.process("[1, 2, 3", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
         end
 
         it "raises on a mismatched closing bracket in an array ([1, 2})" do
-          expect { FlexJSON.parse("[1, 2}", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
+          expect { FlexJSON.process("[1, 2}", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
         end
 
         it 'raises on a mismatched closing bracket in an object ({"a": 1])' do
-          expect { FlexJSON.parse('{"a": 1]', acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
+          expect { FlexJSON.process('{"a": 1]', acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
         end
 
         it "returns nil for empty input (zero documents)" do
-          expect(FlexJSON.parse("", acceleration: acceleration)).to be_nil
+          expect(FlexJSON.process("", acceleration: acceleration)).to be_nil
         end
 
         it "returns nil for whitespace-only input (zero documents)" do
-          expect(FlexJSON.parse("    ", acceleration: acceleration)).to be_nil
+          expect(FlexJSON.process("    ", acceleration: acceleration)).to be_nil
         end
 
         it "returns nil for comment-only input (zero documents)" do
-          expect(FlexJSON.parse("// just a comment\n", acceleration: acceleration)).to be_nil
+          expect(FlexJSON.process("// just a comment\n", acceleration: acceleration)).to be_nil
         end
 
         it "raises FlexJSON::ParseError on bad escape sequence" do
-          expect { FlexJSON.parse('"\q"', acceleration: acceleration) }.to raise_error(FlexJSON::ParseError, /escape/)
+          expect { FlexJSON.process('"\q"', acceleration: acceleration) }.to raise_error(FlexJSON::ParseError, /escape/)
         end
 
         it "reports line and column on the error" do
           # A mismatched closing bracket on line 3 is genuinely unparseable.
           # (Note: `@` is NOT an error — it is a valid quoteless string.)
 
-          FlexJSON.parse("{\n  \"a\": 1\n  ]", acceleration: acceleration)
+          FlexJSON.process("{\n  \"a\": 1\n  ]", acceleration: acceleration)
           raise "expected ParseError"
         rescue FlexJSON::ParseError => e
           expect(e.line).to eq(3)
@@ -703,11 +704,11 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
 
         it 'parses {"a": @} as a quoteless string (not an error)' do
-          expect(FlexJSON.parse('{"a": @}', acceleration: acceleration)).to eq({ "a" => "@" })
+          expect(FlexJSON.process('{"a": @}', acceleration: acceleration)).to eq({ "a" => "@" })
         end
 
         it "reports line and column on unterminated string" do
-          FlexJSON.parse('"oops', acceleration: acceleration)
+          FlexJSON.process('"oops', acceleration: acceleration)
           raise "expected ParseError"
         rescue FlexJSON::ParseError => e
           expect(e.line).to eq(1)
@@ -722,13 +723,13 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       describe "parse_file" do
         it "reads and parses a UTF-8 fixture file" do
           file = File.join(fixtures_dir, "json_pass1.json")
-          result = FlexJSON.parse_file(file, acceleration: acceleration)
+          result = FlexJSON.process_file(file, acceleration: acceleration)
           expect(result).to be_a(Array)
           expect(result[0]).to eq("JSON Test Pattern pass1")
         end
 
         it "raises Errno::ENOENT for missing file" do
-          expect { FlexJSON.parse_file("/nonexistent/path/to/file.json", acceleration: acceleration) }.to raise_error(Errno::ENOENT)
+          expect { FlexJSON.process_file("/nonexistent/path/to/file.json", acceleration: acceleration) }.to raise_error(Errno::ENOENT)
         end
       end
 
@@ -737,10 +738,10 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       # ============================================================
 
       describe "parse with a block (multiple top-level values)" do
-        # Collect the values yielded by the block form of FlexJSON.parse.
+        # Collect the values yielded by the block form of FlexJSON.process.
         def parse_values(input, **opts)
           values = []
-          FlexJSON.parse(input, **opts) { |v| values << v }
+          FlexJSON.process(input, **opts) { |v| values << v }
           values
         end
 
@@ -774,7 +775,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
 
         it "returns nil from the block form" do
-          expect(FlexJSON.parse('{"a": 1}', acceleration: acceleration) { |_v| }).to be_nil
+          expect(FlexJSON.process('{"a": 1}', acceleration: acceleration) { |_v| }).to be_nil
         end
       end
 
@@ -783,69 +784,86 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       # (no option, no flag; the count is detected for free)
       # ============================================================
 
-      describe "block form streams each document (.parse and .parse_file)" do
-        it ".parse yields each top-level document and returns nil" do
+      describe "process: String / IO / block streaming" do
+        it "process(String) with a block yields each top-level document and returns nil" do
           out = []
-          rv = FlexJSON.parse(%({"id":1}\n{"id":2}\n{"id":3}), acceleration: acceleration) { |v| out << v }
+          rv = FlexJSON.process(%({"id":1}\n{"id":2}\n{"id":3}), acceleration: acceleration) { |v| out << v }
           expect(out).to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
           expect(rv).to be_nil
         end
 
-        it ".parse_file yields each top-level document and returns nil" do
+        it "process(IO) with a block streams each document from the IO" do
+          io = StringIO.new(%({"id":1}\n{"id":2}\n{"id":3}\n))
           out = []
-          rv = FlexJSON.parse_file(File.join(fixtures_dir, "multi_doc.ndjson"), acceleration: acceleration) { |v| out << v }
+          rv = FlexJSON.process(io, acceleration: acceleration) { |v| out << v }
           expect(out).to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
           expect(rv).to be_nil
         end
 
-        it ".parse_file without a block returns an Array of the documents" do
-          expect(FlexJSON.parse_file(File.join(fixtures_dir, "multi_doc.ndjson"), acceleration: acceleration)).to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
+        it "process(IO) without a block returns the value or Array" do
+          expect(FlexJSON.process(StringIO.new('{"a":1}'), acceleration: acceleration)).to eq({ "a" => 1 })
+          expect(FlexJSON.process(StringIO.new(%({"a":1}\n{"b":2})), acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
+        end
+
+        it "process raises ArgumentError for neither a String nor an IO" do
+          expect { FlexJSON.process(42, acceleration: acceleration) }.to raise_error(ArgumentError)
+        end
+
+        it "process_file with a block streams each document from disk and returns nil" do
+          out = []
+          rv = FlexJSON.process_file(File.join(fixtures_dir, "multi_doc.ndjson"), acceleration: acceleration) { |v| out << v }
+          expect(out).to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
+          expect(rv).to be_nil
+        end
+
+        it "process_file without a block returns an Array of the documents" do
+          expect(FlexJSON.process_file(File.join(fixtures_dir, "multi_doc.ndjson"), acceleration: acceleration)).to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
         end
       end
 
       describe "parse without a block (auto nil / value / Array)" do
         it "returns nil for empty input (zero documents)" do
-          expect(FlexJSON.parse("", acceleration: acceleration)).to be_nil
+          expect(FlexJSON.process("", acceleration: acceleration)).to be_nil
         end
 
         it "returns the value itself for a single document" do
-          expect(FlexJSON.parse('{"a": 1}', acceleration: acceleration)).to eq({ "a" => 1 })
+          expect(FlexJSON.process('{"a": 1}', acceleration: acceleration)).to eq({ "a" => 1 })
         end
 
         it "returns a bare scalar as itself (single document)" do
-          expect(FlexJSON.parse("42", acceleration: acceleration)).to eq(42)
+          expect(FlexJSON.process("42", acceleration: acceleration)).to eq(42)
         end
 
         it "returns a single top-level array as that array (one document, not flattened)" do
-          expect(FlexJSON.parse("[1, 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
+          expect(FlexJSON.process("[1, 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
         end
 
         it "returns an Array of documents for newline-delimited JSON (NDJSON / JSONL)" do
           input = %({"event": 1}\n{"event": 2}\n{"event": 3}\n)
-          expect(FlexJSON.parse(input, acceleration: acceleration)).to eq([{ "event" => 1 }, { "event" => 2 }, { "event" => 3 }])
+          expect(FlexJSON.process(input, acceleration: acceleration)).to eq([{ "event" => 1 }, { "event" => 2 }, { "event" => 3 }])
         end
 
         it "returns an Array for concatenated objects with no separator" do
-          expect(FlexJSON.parse('{"a":1}{"b":2}', acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
+          expect(FlexJSON.process('{"a":1}{"b":2}', acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
         end
 
         it "returns an Array for space-separated top-level values of mixed types" do
-          expect(FlexJSON.parse('42 "x" true', acceleration: acceleration)).to eq([42, "x", true])
+          expect(FlexJSON.process('42 "x" true', acceleration: acceleration)).to eq([42, "x", true])
         end
 
         it "returns an Array of arrays for newline-separated top-level arrays" do
-          expect(FlexJSON.parse("[1,2]\n[3,4]", acceleration: acceleration)).to eq([[1, 2], [3, 4]])
+          expect(FlexJSON.process("[1,2]\n[3,4]", acceleration: acceleration)).to eq([[1, 2], [3, 4]])
         end
 
         # Implicit-root ARRAY stays unsupported: commas do NOT separate top-level
         # documents (only whitespace / newline / concatenation do), so a bracketless
         # comma list is still an unexpected character after the first value.
         it "still raises on a bracketless comma-separated top-level list (implicit array unsupported)" do
-          expect { FlexJSON.parse("1, 2, 3", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
+          expect { FlexJSON.process("1, 2, 3", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
         end
 
         it "still raises on bracketless comma-separated bare words" do
-          expect { FlexJSON.parse("red, green, blue", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
+          expect { FlexJSON.process("red, green, blue", acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
         end
       end
 
@@ -855,7 +873,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
       describe "fixture-based integration" do
         it "parses comments_test.hjson with all comment styles and string values" do
-          result = FlexJSON.parse_file(File.join(fixtures_dir, "comments_test.hjson"), acceleration: acceleration)
+          result = FlexJSON.process_file(File.join(fixtures_dir, "comments_test.hjson"), acceleration: acceleration)
           expect(result["foo1"]).to eq("This is a string value.")   # quoteless, ends at " #"
           expect(result["foo2"]).to eq("This is a string value.")   # quoted
           expect(result["bar1"]).to eq("This is a string value.")   # quoteless, ends at " //"
@@ -875,7 +893,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
 
         it "parses strings_test.hjson and recognizes string-vs-literal distinction" do
-          result = FlexJSON.parse_file(File.join(fixtures_dir, "strings_test.hjson"), acceleration: acceleration)
+          result = FlexJSON.process_file(File.join(fixtures_dir, "strings_test.hjson"), acceleration: acceleration)
           expect(result["text1"]).to eq("This is a valid string value.")
           expect(result["text3"]).to eq("You need quotes\tfor escapes")
           expect(result["text4a"]).to eq(" untrimmed ")
@@ -893,7 +911,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
 
         it "parses oa_test.hjson as a 7-element mixed array" do
-          result = FlexJSON.parse_file(File.join(fixtures_dir, "oa_test.hjson"), acceleration: acceleration)
+          result = FlexJSON.process_file(File.join(fixtures_dir, "oa_test.hjson"), acceleration: acceleration)
           expect(result.size).to eq(7)
           expect(result[0]).to eq("a")
           expect(result[1]).to eq({})
@@ -905,12 +923,12 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
 
         it "parses root_test.hjson (implicit root + nested object)" do
-          result = FlexJSON.parse_file(File.join(fixtures_dir, "root_test.hjson"), acceleration: acceleration)
+          result = FlexJSON.process_file(File.join(fixtures_dir, "root_test.hjson"), acceleration: acceleration)
           expect(result).to eq({ "database" => { "host" => "127.0.0.1", "port" => 555 } })
         end
 
         it "parses kan_test.hjson (mixed number/literal/string contexts)" do
-          result = FlexJSON.parse_file(File.join(fixtures_dir, "kan_test.hjson"), acceleration: acceleration)
+          result = FlexJSON.process_file(File.join(fixtures_dir, "kan_test.hjson"), acceleration: acceleration)
           # numbers context: recognized numbers (commas optional)
           expect(result["numbers"]).to eq([0, 0, -0, 42, 42.1, -5, -5.1, 1701.0, -1701.0, 12.345, -12.345])
           # native context: true/false/null
@@ -925,7 +943,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
 
         it "parses empty_test.hjson with empty-string key" do
-          result = FlexJSON.parse_file(File.join(fixtures_dir, "empty_test.hjson"), acceleration: acceleration)
+          result = FlexJSON.process_file(File.join(fixtures_dir, "empty_test.hjson"), acceleration: acceleration)
           expect(result).to eq({ "" => "empty" })
         end
 
@@ -934,23 +952,23 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           # flex_json is lenient: two valid top-level values (an object, then a
           # string) parse as a 2-element Array with no block needed — no data is
           # dropped. (Strict JSON rejects this; flex_json does not.)
-          expect(FlexJSON.parse(input, acceleration: acceleration)).to eq([{ "Extra value after close" => true }, "misplaced quoted value"])
+          expect(FlexJSON.process(input, acceleration: acceleration)).to eq([{ "Extra value after close" => true }, "misplaced quoted value"])
         end
 
         it "recovers both values from json_fail10.json via the block form" do
           input = File.read(File.join(fixtures_dir, "json_fail10.json"))
           result = []
-          FlexJSON.parse(input, acceleration: acceleration) { |v| result << v }
+          FlexJSON.process(input, acceleration: acceleration) { |v| result << v }
           expect(result).to eq([{ "Extra value after close" => true }, "misplaced quoted value"])
         end
 
         it "raises ParseError on oj_fail2.json (unclosed array)" do
           input = File.read(File.join(fixtures_dir, "oj_fail2.json"))
-          expect { FlexJSON.parse(input, acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
+          expect { FlexJSON.process(input, acceleration: acceleration) }.to raise_error(FlexJSON::ParseError)
         end
 
         it "parses oj_pass1.json (similar to json_pass1, with numeric overflow)" do
-          result = FlexJSON.parse_file(File.join(fixtures_dir, "oj_pass1.json"), acceleration: acceleration)
+          result = FlexJSON.process_file(File.join(fixtures_dir, "oj_pass1.json"), acceleration: acceleration)
           expect(result).to be_a(Array)
           expect(result[0]).to eq("JSON Test Pattern pass1")
           # 23456789012E666 overflows to Infinity (per §7.2 tentative)
@@ -964,20 +982,20 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
       describe "control characters and escapes" do
         it "keeps a raw tab byte literally inside a double-quoted string" do
-          expect(FlexJSON.parse(%("a\tb"), acceleration: acceleration)).to eq("a\tb")
+          expect(FlexJSON.process(%("a\tb"), acceleration: acceleration)).to eq("a\tb")
         end
 
         it "keeps a raw newline byte literally inside a double-quoted string" do
-          expect(FlexJSON.parse(%("a\nb"), acceleration: acceleration)).to eq("a\nb")
+          expect(FlexJSON.process(%("a\nb"), acceleration: acceleration)).to eq("a\nb")
         end
 
         it 'processes \\n escape inside a single-quoted string (same as double-quoted)' do
           # Ruby source "'a\\nb'" is the 5 chars  ' a \ n b ' → parser turns \n into a newline
-          expect(FlexJSON.parse("'a\\nb'", acceleration: acceleration)).to eq("a\nb")
+          expect(FlexJSON.process("'a\\nb'", acceleration: acceleration)).to eq("a\nb")
         end
 
         it 'processes \\t escape inside a single-quoted string' do
-          expect(FlexJSON.parse("'a\\tb'", acceleration: acceleration)).to eq("a\tb")
+          expect(FlexJSON.process("'a\\tb'", acceleration: acceleration)).to eq("a\tb")
         end
       end
 
@@ -988,71 +1006,71 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       describe "options" do
         describe "symbolize_keys" do
           it "returns symbol keys when symbolize_keys: true" do
-            expect(FlexJSON.parse('{"a": 1, "b": 2}', symbolize_keys: true, acceleration: acceleration)).to eq({ a: 1, b: 2 })
+            expect(FlexJSON.process('{"a": 1, "b": 2}', symbolize_keys: true, acceleration: acceleration)).to eq({ a: 1, b: 2 })
           end
 
           it "symbolizes nested object keys" do
-            expect(FlexJSON.parse('{"outer": {"inner": 1}}', symbolize_keys: true, acceleration: acceleration)).to eq({ outer: { inner: 1 } })
+            expect(FlexJSON.process('{"outer": {"inner": 1}}', symbolize_keys: true, acceleration: acceleration)).to eq({ outer: { inner: 1 } })
           end
 
           it "defaults to string keys" do
-            expect(FlexJSON.parse('{"a": 1}', acceleration: acceleration)).to eq({ "a" => 1 })
+            expect(FlexJSON.process('{"a": 1}', acceleration: acceleration)).to eq({ "a" => 1 })
           end
         end
 
         describe "deep nesting" do
           it "parses deeply nested input without stack overflow (iterative parser, both paths)" do
             deep = ("[" * 1000) + ("]" * 1000)
-            result = FlexJSON.parse(deep, acceleration: acceleration)
+            result = FlexJSON.process(deep, acceleration: acceleration)
             expect(result).to be_a(Array)
           end
         end
 
         describe "duplicate_key" do
           it "last value wins by default" do
-            expect(FlexJSON.parse('{"a": 1, "a": 2}', acceleration: acceleration)["a"]).to eq(2)
+            expect(FlexJSON.process('{"a": 1, "a": 2}', acceleration: acceleration)["a"]).to eq(2)
           end
 
           it "first value wins with duplicate_key: :first_wins" do
-            expect(FlexJSON.parse('{"a": 1, "a": 2}', duplicate_key: :first_wins, acceleration: acceleration)["a"]).to eq(1)
+            expect(FlexJSON.process('{"a": 1, "a": 2}', duplicate_key: :first_wins, acceleration: acceleration)["a"]).to eq(1)
           end
 
           it "raises with duplicate_key: :raise" do
             expect do
-              FlexJSON.parse('{"a": 1, "a": 2}', duplicate_key: :raise, acceleration: acceleration)
+              FlexJSON.process('{"a": 1, "a": 2}', duplicate_key: :raise, acceleration: acceleration)
             end.to raise_error(FlexJSON::ParseError, /duplicate/i)
           end
         end
 
         describe "bigdecimal_load (Oj-compatible; default :auto)" do
           it "loads a >16-significant-digit decimal as BigDecimal by default (:auto)" do
-            expect(FlexJSON.parse("0.12345678901234567", acceleration: acceleration)).to eql(BigDecimal("0.12345678901234567"))
+            expect(FlexJSON.process("0.12345678901234567", acceleration: acceleration)).to eql(BigDecimal("0.12345678901234567"))
           end
 
           it "keeps a 16-significant-digit decimal as Float (:auto)" do
-            expect(FlexJSON.parse("0.1234567890123456", acceleration: acceleration)).to eql(0.1234567890123456)
+            expect(FlexJSON.process("0.1234567890123456", acceleration: acceleration)).to eql(0.1234567890123456)
           end
 
           it "keeps a 20-digit integer as Integer, never BigDecimal (:auto)" do
-            expect(FlexJSON.parse("12345678901234567890", acceleration: acceleration)).to eql(12_345_678_901_234_567_890)
+            expect(FlexJSON.process("12345678901234567890", acceleration: acceleration)).to eql(12_345_678_901_234_567_890)
           end
 
           it "forces Float with bigdecimal_load: :float even for high precision" do
-            expect(FlexJSON.parse("0.12345678901234567", bigdecimal_load: :float, acceleration: acceleration)).to be_a(Float)
+            expect(FlexJSON.process("0.12345678901234567", bigdecimal_load: :float, acceleration: acceleration)).to be_a(Float)
           end
 
           it "forces BigDecimal for any decimal with bigdecimal_load: :bigdecimal" do
-            expect(FlexJSON.parse("3.14", bigdecimal_load: :bigdecimal, acceleration: acceleration)).to eql(BigDecimal("3.14"))
+            expect(FlexJSON.process("3.14", bigdecimal_load: :bigdecimal, acceleration: acceleration)).to eql(BigDecimal("3.14"))
           end
 
           it "applies in array/member position too" do
-            result = FlexJSON.parse("[0.12345678901234567, 1.5]", acceleration: acceleration)
+            result = FlexJSON.process("[0.12345678901234567, 1.5]", acceleration: acceleration)
             expect(result[0]).to eql(BigDecimal("0.12345678901234567"))
             expect(result[1]).to eql(1.5)
           end
 
           it "normalizes a trailing-dot decimal under :bigdecimal" do
-            result = FlexJSON.parse("5.", bigdecimal_load: :bigdecimal, acceleration: acceleration)
+            result = FlexJSON.process("5.", bigdecimal_load: :bigdecimal, acceleration: acceleration)
             expect(result).to be_a(BigDecimal)
             expect(result).to eq(BigDecimal("5"))
           end
@@ -1067,31 +1085,31 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
           it "matches String#to_f for a >17-significant-digit float (strtod fallback)" do
             s = "1.2345678901234567890" # 20 sig digits — beyond Ryū's 17-digit fast path
-            expect(FlexJSON.parse(s, bigdecimal_load: :float, acceleration: acceleration)).to eql(s.to_f)
+            expect(FlexJSON.process(s, bigdecimal_load: :float, acceleration: acceleration)).to eql(s.to_f)
           end
 
           it "matches String#to_f for a subnormal-range float" do
             s = "1e-310" # mantissa_digits + exponent < -307 — subnormal fallback
-            expect(FlexJSON.parse(s, acceleration: acceleration)).to eql(s.to_f)
+            expect(FlexJSON.process(s, acceleration: acceleration)).to eql(s.to_f)
           end
 
           it "returns Infinity for an extreme positive exponent" do
-            expect(FlexJSON.parse("1e2000000", acceleration: acceleration)).to eql(Float::INFINITY)
+            expect(FlexJSON.process("1e2000000", acceleration: acceleration)).to eql(Float::INFINITY)
           end
 
           it "returns 0.0 for an extreme negative exponent" do
-            expect(FlexJSON.parse("1e-2000000", acceleration: acceleration)).to eql(0.0)
+            expect(FlexJSON.process("1e-2000000", acceleration: acceleration)).to eql(0.0)
           end
 
           it "preserves negative zero (-0.0, distinct from 0.0)" do
-            result = FlexJSON.parse("-0.0", acceleration: acceleration)
+            result = FlexJSON.process("-0.0", acceleration: acceleration)
             expect(result).to eql(-0.0)
             expect(1.0 / result).to eql(-Float::INFINITY) # sign bit preserved
           end
 
           it "matches String#to_f for a >17-digit float carrying underscores" do
             s = "1.234_567_890_123_456_789" # underscores + >17 digits — strip then strtod fallback
-            expect(FlexJSON.parse(s, bigdecimal_load: :float, acceleration: acceleration)).to eql(s.delete("_").to_f)
+            expect(FlexJSON.process(s, bigdecimal_load: :float, acceleration: acceleration)).to eql(s.delete("_").to_f)
           end
         end
       end
@@ -1102,19 +1120,19 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
       describe "whitespace semantics ([[:space:]], same as Rails blank?)" do
         it "treats vertical tab (0x0B) as whitespace between tokens" do
-          expect(FlexJSON.parse("[1,\x0B2,\x0B3]", acceleration: acceleration)).to eq([1, 2, 3])
+          expect(FlexJSON.process("[1,\x0B2,\x0B3]", acceleration: acceleration)).to eq([1, 2, 3])
         end
 
         it "treats form feed (0x0C) as whitespace between tokens" do
-          expect(FlexJSON.parse("[1,\x0C2,\x0C3]", acceleration: acceleration)).to eq([1, 2, 3])
+          expect(FlexJSON.process("[1,\x0C2,\x0C3]", acceleration: acceleration)).to eq([1, 2, 3])
         end
 
         it "treats NBSP (U+00A0) as whitespace between tokens" do
-          expect(FlexJSON.parse("[\u00A01\u00A0,\u00A02]", acceleration: acceleration)).to eq([1, 2])
+          expect(FlexJSON.process("[\u00A01\u00A0,\u00A02]", acceleration: acceleration)).to eq([1, 2])
         end
 
         it "trims NBSP (U+00A0) around a quoteless value" do
-          expect(FlexJSON.parse("x:\u00A0value\u00A0", acceleration: acceleration)).to eq({ "x" => "value" })
+          expect(FlexJSON.process("x:\u00A0value\u00A0", acceleration: acceleration)).to eq({ "x" => "value" })
         end
       end
 
@@ -1125,7 +1143,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       describe "encoding errors" do
         it "raises FlexJSON::EncodingError on bytes invalid for the claimed encoding" do
           input = "\"bad\xFF byte\"".b.force_encoding("UTF-8") # 0xFF is not valid UTF-8
-          expect { FlexJSON.parse(input, acceleration: acceleration) }.to raise_error(FlexJSON::EncodingError)
+          expect { FlexJSON.process(input, acceleration: acceleration) }.to raise_error(FlexJSON::EncodingError)
         end
 
         it "FlexJSON::EncodingError is a kind of ParseError" do
@@ -1139,7 +1157,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
       describe "out-of-scope values stay strings" do
         it "leaves a date string as a String (§3 row 22)" do
-          expect(FlexJSON.parse('"2025-01-31"', acceleration: acceleration)).to eq("2025-01-31")
+          expect(FlexJSON.process('"2025-01-31"', acceleration: acceleration)).to eq("2025-01-31")
         end
       end
     end

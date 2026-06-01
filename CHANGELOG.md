@@ -1,6 +1,14 @@
 
 # FlexJSON Change Log
 
+## 0.4.0 (2026-05-31 unreleased)
+- rename `flex_json` -> `smarter_json`
+
+
+## 0.3.10 (2026-05-31 unreleased)
+- change interface to use `.process` and `.process_file`
+
+
 ## 0.3.9 (2026-05-31 unreleased)
 - `parse` (no block) now handles any input automatically: 0 documents (empty / whitespace / comment-only) → `nil`, 1 document → the value itself, 2+ documents (NDJSON / JSONL / concatenated / whitespace-separated) → an Array of the values. It no longer raises on trailing content.
 - Detection is free (the same trailing-content check that used to raise) and the single-document path allocates no Array, so single-value parsing is unchanged in speed.
