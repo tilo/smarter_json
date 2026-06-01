@@ -1,5 +1,10 @@
 
 # SmarterJSON Change Log
+
+## 0.5.1 (2026-05-31 unreleased)
+- error classes
+- test matric setup
+
 ## 0.5.0 (2026-05-31 unreleased)
 - add JSON generation, incl. NDJSON generation
 - add test coverage
