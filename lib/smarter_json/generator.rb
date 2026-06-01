@@ -70,7 +70,7 @@ module SmarterJSON
       when Array      then emit_array(obj, buf)
       when Hash       then emit_hash(obj, buf)
       else
-        raise SmarterJSON::Error, "SmarterJSON.generate cannot serialize #{obj.class}"
+        raise SmarterJSON::GenerateError, "SmarterJSON.generate cannot serialize #{obj.class}"
       end
     end
 
@@ -103,13 +103,13 @@ module SmarterJSON
     end
 
     def emit_float(flt, buf)
-      raise SmarterJSON::Error, "SmarterJSON.generate cannot serialize non-finite Float #{flt}" unless flt.finite?
+      raise SmarterJSON::GenerateError, "SmarterJSON.generate cannot serialize non-finite Float #{flt}" unless flt.finite?
 
       buf << flt.to_s # Ruby's Float#to_s is shortest round-trippable; e-notation is valid JSON
     end
 
     def emit_bigdecimal(num, buf)
-      raise SmarterJSON::Error, "SmarterJSON.generate cannot serialize non-finite BigDecimal" unless num.finite?
+      raise SmarterJSON::GenerateError, "SmarterJSON.generate cannot serialize non-finite BigDecimal" unless num.finite?
 
       buf << num.to_s("F") # plain decimal notation (BigDecimal's default "0.1e1" is not valid JSON)
     end

@@ -3,6 +3,7 @@
 require "bigdecimal" # for bigdecimal_load: :auto / :bigdecimal (Oj-compatible)
 
 require_relative "smarter_json/version"
+require_relative "smarter_json/errors" # base Error + subclasses — must load before parser/generator
 require_relative "smarter_json/parser"
 require_relative "smarter_json/generator"
 
@@ -15,8 +16,6 @@ rescue LoadError
 end
 
 module SmarterJSON
-  class Error < StandardError; end
-
   HAS_ACCELERATION = respond_to?(:parse_c)
 
   # parse_c is internal — the public API is process / process_file / generate.
