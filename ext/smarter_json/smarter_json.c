@@ -1119,6 +1119,12 @@ static void fj_hash_bulk_insert(long count, const VALUE *pairs, VALUE hash) {
   for (i = 0; i + 1 < count; i += 2) rb_hash_aset(hash, pairs[i], pairs[i + 1]);
 }
 #define rb_hash_bulk_insert fj_hash_bulk_insert
+#else
+/* Ruby 2.6 *exports* rb_hash_bulk_insert as a symbol (so have_func / HAVE_* is set
+ * and the shim above is skipped) but does NOT declare it in any public header. Modern
+ * clang treats the resulting implicit call as a hard error, so declare the prototype
+ * ourselves. On 2.7+ the header already declares it identically, which is harmless. */
+void rb_hash_bulk_insert(long, const VALUE *, VALUE);
 #endif
 
 /* Hash entry count as a C long. RHASH_SIZE is not part of the public C API on

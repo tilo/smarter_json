@@ -1,17 +1,8 @@
 # frozen_string_literal: true
 
 module SmarterJSON
-  class ParseError < StandardError
-    attr_reader :line, :col
-
-    def initialize(message, line = nil, col = nil)
-      @line = line
-      @col = col
-      super(line && col ? "#{message} at line #{line}, col #{col}" : message)
-    end
-  end
-
-  class EncodingError < ParseError; end
+  # ParseError / EncodingError live in errors.rb (loaded first) so they can inherit
+  # from the shared SmarterJSON::Error base.
 
   module_function
 
