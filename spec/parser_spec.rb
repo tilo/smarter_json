@@ -881,6 +881,72 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           ws = [0x1680, 0x205f].pack("U*")
           expect(SmarterJSON.process("#{ws}42", acceleration: acceleration)).to eq(42)
         end
+
+        it "treats the ideographic space (U+3000) as whitespace between tokens" do
+          expect(SmarterJSON.process("　{}　", acceleration: acceleration)).to eq({})
+        end
+
+        # A '#' starts a comment only when preceded by whitespace. Here the
+        # preceding whitespace is a multibyte char (NBSP, U+00A0) with no ASCII
+        # space between it and the '#', exercising the rare walk-back-over-
+        # continuation-bytes branch of preceded_by_ws_or_start?.
+        it "applies the comment-marker rule when the preceding whitespace is a multibyte Unicode space" do
+          expect(SmarterJSON.process("42 # trailing comment\n", acceleration: acceleration)).to eq(42)
+        end
+
+        it "raises on an unterminated smart-quoted string" do
+          expect { SmarterJSON.process("[“unclosed", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+        end
+
+        it "classifies a quoteless 'undefined' value as nil" do
+          expect(SmarterJSON.process("{a: undefined}", acceleration: acceleration)).to eq({ "a" => nil })
+        end
+
+        it "classifies a quoteless 'NaN' value as Float::NAN" do
+          result = SmarterJSON.process("{a: NaN}", acceleration: acceleration)
+          expect(result["a"]).to be_a(Float)
+          expect(result["a"]).to be_nan
+        end
+
+        it "classifies a quoteless 'Infinity' / '+Infinity' value as Float::INFINITY" do
+          expect(SmarterJSON.process("{a: Infinity}", acceleration: acceleration)).to eq({ "a" => Float::INFINITY })
+          expect(SmarterJSON.process("{a: +Infinity}", acceleration: acceleration)).to eq({ "a" => Float::INFINITY })
+        end
+
+        # JSON5 line continuation: a backslash immediately before a CRLF emits
+        # nothing, joining the two lines (the CR branch must also swallow the LF).
+        it "treats a backslash before CRLF inside a string as a line continuation" do
+          expect(SmarterJSON.process(%("a\\\r\nb"), acceleration: acceleration)).to eq("ab")
+        end
+
+        it "decodes a valid UTF-16 surrogate pair (\\uD83D\\uDE00 -> grinning face)" do
+          expect(SmarterJSON.process(%q{"\uD83D\uDE00"}, acceleration: acceleration)).to eq("\u{1F600}")
+        end
+
+        it "raises on a high surrogate not followed by a \\u escape" do
+          expect { SmarterJSON.process('"\uD800x"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+        end
+
+        it "raises on a high surrogate followed by an invalid low-surrogate \\u escape" do
+          expect { SmarterJSON.process('"\uD800\uZZZZ"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+        end
+
+        it "raises on a high surrogate followed by a non-low-surrogate code point" do
+          expect { SmarterJSON.process('"\uD800\u0041"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+        end
+
+        it "raises 'invalid number' on a lone sign with no digits" do
+          expect { SmarterJSON.process("-", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process("+", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+        end
+
+        it "parses a hex number with lowercase a-f digits" do
+          expect(SmarterJSON.process("0xabc", acceleration: acceleration)).to eq(0xabc)
+        end
+
+        it "raises 'unexpected character' on a non-printable control byte" do
+          expect { SmarterJSON.process("\x07", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+        end
       end
 
       # ============================================================
