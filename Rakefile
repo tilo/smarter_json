@@ -16,4 +16,7 @@ Rake::ExtensionTask.new("smarter_json") do |ext|
 end
 
 task spec: :compile
-task default: %i[clobber compile spec rubocop]
+# rubocop is NOT in the default task: `bundle exec rake` = build + test only, so it
+# runs on every Ruby in the CI matrix (incl. 2.5–2.7, where the latest rubocop won't
+# install). Lint runs as its own CI step on one modern Ruby. Locally: `rake rubocop`.
+task default: %i[clobber compile spec]

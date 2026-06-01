@@ -867,6 +867,22 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
       end
 
+      describe "parser edge cases (coverage)" do
+        it "parses undefined as nil" do
+          expect(SmarterJSON.process("undefined", acceleration: acceleration)).to be_nil
+        end
+
+        it "raises on truncated input (unterminated container)" do
+          expect { SmarterJSON.process("[1, 2", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process('{"a":', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+        end
+
+        it "treats rare Unicode whitespace (U+1680 Ogham, U+205F math space) as whitespace" do
+          ws = [0x1680, 0x205f].pack("U*")
+          expect(SmarterJSON.process("#{ws}42", acceleration: acceleration)).to eq(42)
+        end
+      end
+
       # ============================================================
       # Fixture-based integration tests
       # ============================================================

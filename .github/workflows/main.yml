@@ -1,32 +1,71 @@
 name: Ruby
 
+# Runs on every branch push and every pull request, so the matrix runs as soon
+# as you push a branch to GitHub.
 on:
   push:
-    branches:
-      - 
-
   pull_request:
 
 permissions:
   contents: read
 
+# Cancel an in-progress run when a newer commit is pushed to the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    name: Ruby ${{ matrix.ruby }}
+  test_matrix:
+    name: Ruby ${{ matrix.ruby }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}-latest
     strategy:
+      fail-fast: false
       matrix:
+        os:
+          - ubuntu
+          - macos
         ruby:
-          - '3.4.7'
+          - "2.6"
+          - "2.7"
+          - "3.0"
+          - "3.1"
+          - "3.2"
+          - "3.3"
+          - "3.4"
+          - "4.0"
+          - head
 
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Set up Ruby
+      - name: Set up Ruby ${{ matrix.ruby }}
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
-      - name: Run the default task
+      # `rake` default = clobber + compile (C extension) + spec (no rubocop), so every
+      # matrix cell — including 2.6/2.7, where the latest rubocop won't install —
+      # builds and tests the C-accelerated path, not just Ruby. Lint runs separately.
+      - name: Compile and test
         run: bundle exec rake
+      # Lint once, on a modern Ruby only (rubocop drops old Rubies; running it on every
+      # cell would fail on 2.6/2.7).
+      - name: Lint
+        if: matrix.os == 'ubuntu' && matrix.ruby == '3.4'
+        run: bundle exec rubocop
+      # Upload coverage once (single representative cell) to avoid duplicate reports.
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu' && matrix.ruby == '3.4'
+        uses: codecov/codecov-action@v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/.resultset.json
+          fail_ci_if_error: false
+
+  finish:
+    name: All green
+    runs-on: ubuntu-latest
+    needs: [test_matrix]
+    steps:
+      - run: echo "All matrix jobs passed."

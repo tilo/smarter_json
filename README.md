@@ -1,5 +1,7 @@
 # SmarterJSON
 
+![Gem Version](https://img.shields.io/gem/v/smarter_json) [![codecov](https://codecov.io/gh/tilo/smarter_json/branch/main/graph/badge.svg)](https://codecov.io/gh/tilo/smarter_json) [![Downloads](https://img.shields.io/gem/dt/smarter_json)](https://rubygems.org/gems/smarter_json) [![RubyGems](https://img.shields.io/badge/RubyGems-smarter__json-brightgreen?logo=rubygems&logoColor=white)](https://rubygems.org/gems/smarter_json) [![Ruby Toolbox](https://img.shields.io/badge/Ruby%20Toolbox-smarter__json-brightgreen)](https://www.ruby-toolbox.com/projects/smarter_json)
+
 A lenient, fast JSON parser for Ruby. It parses strict JSON, JSON5, HJSON-style config, and the messy JSON-ish input humans actually write — and in benchmarks it matches or beats Oj on nearly every file. SmarterJSON is opinionated: we want your JSON processing to be successful. Other parsers are strict - they stop at the first deviation - SmarterJSON keeps going - it optimizes for getting your data out, not for policing the JSON spec.
 
 ## Why SmarterJSON?
@@ -38,6 +40,14 @@ gem install smarter_json
 ```
 
 The C extension is built on install and used automatically. On platforms where it can't build, the pure-Ruby parser runs instead and produces identical results.
+
+## Documentation
+
+  * [Introduction](docs/_introduction.md)
+  * [The Basic Read API](docs/basic_read_api.md)
+  * [The Basic Write API](docs/basic_write_api.md)
+  * [Configuration Options](docs/options.md)
+  * [Examples](docs/examples.md)
 
 ## Usage
 
@@ -84,6 +94,12 @@ Benchmarks: p10 of 40 runs, Apple M1 Max, Ruby 3.4.7, on the standard JSON corpu
 ## Encoding
 
 `encoding:` (default `"UTF-8"`) labels what the input is — it does **not** trigger a transcoding pass. The parser works on the bytes in their native encoding and emits string values with the same encoding tag, the same way `smarter_csv` handles encodings. Bytes that are invalid for the claimed encoding raise `SmarterJSON::EncodingError` (a kind of `SmarterJSON::ParseError`).
+
+## Nesting & untrusted input
+
+Both the C extension and the pure-Ruby parser are **iterative, not recursive** — they track nesting on an explicit, heap-allocated stack rather than the call stack. So deeply nested input **cannot overflow the call stack or segfault**: nesting is bounded only by available memory, the same posture as Oj (which also ships no nesting limit; the stdlib `json` caps at 100). The `deeply_nested.json` benchmark (212 MB of nesting) parses without issue.
+
+The trade-off: there is currently **no fixed nesting or input-size limit**, so extremely large or adversarially-nested untrusted input is bounded by memory (it can exhaust RAM), not by a crash. If you parse untrusted input and want a hard cap, that's a planned opt-in guard — for now, size-limit upstream of the parser.
 
 ## Development
 

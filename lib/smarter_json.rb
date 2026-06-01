@@ -3,9 +3,8 @@
 require "bigdecimal" # for bigdecimal_load: :auto / :bigdecimal (Oj-compatible)
 
 require_relative "smarter_json/version"
-require_relative "smarter_json/row_sep"
-require_relative "smarter_json/peekable_io"
 require_relative "smarter_json/parser"
+require_relative "smarter_json/generator"
 
 # Optional C extension. When compiled and loadable it defines SmarterJSON.parse_c;
 # otherwise we run pure Ruby. (Mirrors smarter_csv's load-with-rescue pattern.)
@@ -20,7 +19,7 @@ module SmarterJSON
 
   HAS_ACCELERATION = respond_to?(:parse_c)
 
-  # parse_c is internal — the public API is parse / parse_file.
-  # (rb_funcall from C and the internal `parse` dispatch still reach it.)
+  # parse_c is internal — the public API is process / process_file / generate.
+  # (rb_funcall from C and the internal `process` dispatch still reach it.)
   private_class_method :parse_c if HAS_ACCELERATION
 end

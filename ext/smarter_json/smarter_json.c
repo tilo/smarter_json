@@ -1121,6 +1121,14 @@ static void fj_hash_bulk_insert(long count, const VALUE *pairs, VALUE hash) {
 #define rb_hash_bulk_insert fj_hash_bulk_insert
 #endif
 
+/* Hash entry count as a C long. RHASH_SIZE is not part of the public C API on
+ * older Ruby (< ~2.7), but rb_hash_size (Hash#size's implementation) is available
+ * everywhere. Only used on the rare :raise duplicate-key path, so the boxing cost
+ * is irrelevant — and it keeps the extension buildable down to Ruby 2.5. */
+static inline long fj_hash_len(VALUE hash) {
+  return NUM2LONG(rb_hash_size(hash));
+}
+
 /* Build a Hash from `count` interleaved key,value slots. Fast path (String keys,
  * default :last_wins or :raise): pre-size + bulk insert, detecting duplicates by
  * comparing the resulting size to the pair count — free unless a collision
@@ -1132,12 +1140,12 @@ static VALUE fj_build_object(fj_state *st, const VALUE *pairs, long count) {
 
   if (!st->symbolize_keys && !st->dup_first_wins) {
     rb_hash_bulk_insert(count, pairs, hash);
-    if (st->dup_raise && (long)RHASH_SIZE(hash) < entries) {
+    if (st->dup_raise && fj_hash_len(hash) < entries) {
       VALUE seen = rb_hash_new_capa(entries);
       for (i = 0; i + 1 < count; i += 2) {
-        long before = (long)RHASH_SIZE(seen);
+        long before = fj_hash_len(seen);
         rb_hash_aset(seen, pairs[i], Qtrue);
-        if ((long)RHASH_SIZE(seen) == before) fj_error(st, "duplicate key");
+        if (fj_hash_len(seen) == before) fj_error(st, "duplicate key");
       }
     }
     return hash;

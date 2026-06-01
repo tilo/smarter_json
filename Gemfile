@@ -12,7 +12,7 @@ group :development do
   gem "awesome_print"
   gem "rake"            # build/package tasks
   gem "rake-compiler"   # builds the C extension
-  gem "rubocop"         # linting only
+  gem "rubocop"         # linting only; bundler resolves a per-Ruby-compatible version
 end
 
 group :test do

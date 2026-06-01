@@ -1,9 +1,11 @@
 
 # SmarterJSON Change Log
+## 0.5.0 (2026-05-31 unreleased)
+- add JSON generation, incl. NDJSON generation
+- add test coverage
 
 ## 0.4.0 (2026-05-31 unreleased)
 - rename `smarter_json` -> `smarter_json`
-
 
 ## 0.3.10 (2026-05-31 unreleased)
 - change interface to use `.process` and `.process_file`
