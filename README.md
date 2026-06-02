@@ -4,13 +4,13 @@
 
 A lenient, fast JSON parser for Ruby. It parses strict JSON, JSON5, HJSON-style config, and the messy JSON-ish input humans actually write — and in benchmarks it matches or beats Oj on nearly every file. SmarterJSON is opinionated: we want your JSON processing to be successful. Other parsers are strict - they stop at the first deviation - SmarterJSON keeps going - it optimizes for getting your data out, not for policing the JSON spec.
 
-| SmarterJSON: one parser, no modes — want strict? please use stdlib json"
+> **SmarterJSON: one parser, no modes — want strict? Please use the stdlib `json` gem.**
 
 ## Why SmarterJSON?
 
-Most JSON parsers reject anything that isn't perfectly strict JSON. SmarterJSON is built on the opposite principle: **you shouldn't have to care what flavor of JSON you were handed** and **you shouldn't lose the whole document because of formatting errors.** Give it strict JSON, JSON5, an HJSON-style config file, newline-delimited JSON, or a copy-pasted blob with comments and trailing commas — it just parses it. When it is lenient, `smarter_json` isn't dropping data that exists, it's just not raising an eyebrow at a suspicious gap (like an extra comma). The strict parser would just refuses the whole document and recovers nothing - `smarter_json` returns everything but the formatting error.
+Most JSON parsers reject anything that isn't perfectly strict JSON. SmarterJSON is built on the opposite principle: **you shouldn't have to care what flavor of JSON you were handed** and **you shouldn't lose the whole document because of formatting errors.** Give it strict JSON, JSON5, an HJSON-style config file, newline-delimited JSON, or a copy-pasted blob with comments and trailing commas — it just parses it. When it is lenient, `smarter_json` isn't dropping data that exists — it's just not raising an eyebrow at a suspicious gap (like an extra comma). A strict parser would refuse the whole document and recover nothing; `smarter_json` returns everything except the formatting error.
 
-| For an ingestion tool, "reject the whole document because of one stray comma" is the worst outcome: you throw away the 99% that's fine to avoid maybe-mishandling a gap that carries no data anyway.
+> For an ingestion tool, "reject the whole document because of one stray comma" is the worst outcome: you throw away the 99% that's fine to avoid maybe-mishandling a gap that carries no data anyway.
 
 Three things set it apart:
 
@@ -81,13 +81,14 @@ SmarterJSON.process_file("events.ndjson") { |event| EventJob.perform_async(event
 | `bigdecimal_load` | `:auto`      | `:auto` keeps high-precision decimals as `BigDecimal`; `:float` forces `Float`; `:bigdecimal` forces `BigDecimal` |
 | `acceleration`    | `true`       | `true` uses the C extension when compiled and loadable; `false` forces pure Ruby (identical results) |
 | `encoding`        | `"UTF-8"`    | labels the input's encoding (no transcoding pass; see below)            |
+| `warnings`        | `false`      | when `true`, return `[result, warnings]` — `warnings` lists the lenient fixes applied (`:empty_slot`, `:empty_value`, `:duplicate_key`) |
 
 ## Performance
 
 Benchmarks: p10 of 40 runs, Apple M1 Max, Ruby 3.4.7, on the standard JSON corpus (canada, citm_catalog, twitter, github_events, …). The apples-to-apples comparisons are **SmarterJSON/C** vs **Oj/strict** vs **stdlib `json`**, all producing `Float` (run `rake report` in `json_benchmarks/` for the full table — numbers vary run to run).
 
-- **vs Oj:** SmarterJSON/C matches or beats Oj on nearly every file — typically **1.1–1.7× faster** (e.g. deeply-nested ~1.7×, citm ~1.3×, twitter ~1.3×, usgs/weather ~1.2–1.3×).
-- **vs stdlib `json` (C):** competitive with the fastest Ruby JSON parser — it matches `json` on number- and string-heavy files (e.g. big_decimals, string_array) and trails by ~1.2–1.6× on others.
+- **vs Oj/strict** (the `JSON.parse`-equivalent mode, both producing `Float`): SmarterJSON/C is faster on nearly every file — typically **1.1–1.6×** (e.g. big_decimals ~1.6×, deeply-nested ~1.4×, citm / twitter / usgs ~1.3×, github / citylots / weather ~1.1–1.2×). The one exception is **string_array**, where Oj/strict's SIMD string scan is ~1.7× faster — that's the current frontier.
+- **vs stdlib `json` (C):** competitive with the fastest Ruby JSON parser — it ties `json` on big_decimals and string_array, and trails by ~1.1–1.7× on the rest. (`canada.json` is the outlier, far behind — that's the `BigDecimal` default, see below.)
 - **Numbers:** floats are parsed with Ryū (correctly rounded, single-pass), so number-heavy data is fast and bit-exact.
 
 **Two notes on fair comparison:**
