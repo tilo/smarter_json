@@ -1,6 +1,14 @@
 
 # SmarterJSON Change Log
 
+## 0.6.0 (2026-06-02)
+- Lenient comma handling: empty slots around / between commas are collapsed (`[1,,2]` → `[1,2]`, `[,1,]` → `[1]`, `{a:1,,b:2}` → `{a:1,b:2}`), on both the C and Ruby paths. No null is inserted for an empty slot.
+- A key with a colon but no value reads as null: `{a:}` → `{"a"=>nil}` (both paths).
+- New opt-in `warnings:` option. With `warnings: true`, `process` / `process_file` return `[result, warnings]`, where `warnings` is an Array of `SmarterJSON::Warning` (`type`, `message`, `line`, `col`) recording the lenient fixes applied — `:empty_slot`, `:empty_value`, `:duplicate_key`. Default off; works on both paths.
+- Fixed a pure-Ruby bug where a mantissa-less exponent token (e.g. `-e695881`) was read as `0.0`; it is now a quoteless string, matching the C path.
+- Fixed a pure-Ruby bug where a `\u` escape whose next bytes split a multibyte character leaked `ArgumentError`; it now raises `SmarterJSON::ParseError`.
+- Added a property/fuzz test suite that checks C/Ruby parity and round-tripping on generated, mutated, and random input.
+
 ## 0.5.2 (2026-06-01)
 - `generate` now supports pretty-printing via the `indent:` option (spaces per nesting level; default `0` = compact). Empty objects/arrays stay inline; `indent:` combined with `format: :ndjson` raises `ArgumentError`.
 - `generate` adds `sort_keys:` (emit object keys in sorted order), `ascii_only:` (escape non-ASCII as `\uXXXX`, astral chars as surrogate pairs), and `script_safe:` (escape `</` and U+2028/U+2029 for safe embedding in an HTML `<script>` tag).

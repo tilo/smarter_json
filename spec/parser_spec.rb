@@ -558,6 +558,19 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           it "parses undefined as nil" do
             expect(SmarterJSON.process("undefined", acceleration: acceleration)).to be_nil
           end
+
+          it "parses undefined as a value (object value, array element) as nil" do
+            expect(SmarterJSON.process('{"a": undefined}', acceleration: acceleration)).to eq({ "a" => nil })
+            expect(SmarterJSON.process("[undefined]", acceleration: acceleration)).to eq([nil])
+          end
+
+          # As a *key*, undefined is the string "undefined" — object keys are always
+          # strings, and recognized-literal-wins does not apply in key position.
+          # (Resolves the design-doc §7.3 open question.)
+          it "parses undefined as an object key as the string \"undefined\"" do
+            expect(SmarterJSON.process("{undefined: 1}", acceleration: acceleration)).to eq({ "undefined" => 1 })
+            expect(SmarterJSON.process('{"undefined": 1}', acceleration: acceleration)).to eq({ "undefined" => 1 })
+          end
         end
 
         describe "underscores in numeric literals" do
@@ -935,6 +948,47 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect { SmarterJSON.process('"\uD800\u0041"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
 
+        # Regression (found by fuzzing): a \\u escape whose next 4 bytes split a raw
+        # multibyte character must raise a clean ParseError, not leak ArgumentError
+        # ("invalid byte sequence in UTF-8") from the Ruby path's hex check.
+        it "raises ParseError (not ArgumentError) when a backslash-u escape is followed by bytes splitting a multibyte char" do
+          input = '"' + "\\uaaa" + [0x3042].pack("U") + '"' # "\\uaaa<3-byte char>"
+          expect { SmarterJSON.process(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+        end
+
+        # Commas are collapsing separators: empty slots around / between commas are
+        # skipped, in both arrays and objects. An explicit `null` is still a value.
+        it "skips empty array slots from leading / interior / trailing commas" do
+          expect(SmarterJSON.process("[,]", acceleration: acceleration)).to eq([])
+          expect(SmarterJSON.process("[,,,]", acceleration: acceleration)).to eq([])
+          expect(SmarterJSON.process("[,1]", acceleration: acceleration)).to eq([1])
+          expect(SmarterJSON.process("[1,]", acceleration: acceleration)).to eq([1])
+          expect(SmarterJSON.process("[1,2,]", acceleration: acceleration)).to eq([1, 2])
+          expect(SmarterJSON.process("[1,,2]", acceleration: acceleration)).to eq([1, 2])
+          expect(SmarterJSON.process("[,1,,2,]", acceleration: acceleration)).to eq([1, 2])
+        end
+
+        it "keeps an explicit null as a value (only truly empty slots are skipped)" do
+          expect(SmarterJSON.process("[null]", acceleration: acceleration)).to eq([nil])
+          expect(SmarterJSON.process("[1,null,2]", acceleration: acceleration)).to eq([1, nil, 2])
+        end
+
+        it "skips empty object members from leading / interior / trailing commas" do
+          expect(SmarterJSON.process("{}", acceleration: acceleration)).to eq({})
+          expect(SmarterJSON.process('{,"a":1}', acceleration: acceleration)).to eq({ "a" => 1 })
+          expect(SmarterJSON.process('{"a":1,,"b":2}', acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+          expect(SmarterJSON.process('{"a":1,}', acceleration: acceleration)).to eq({ "a" => 1 })
+        end
+
+        # A key WITH a colon but no value is different from an empty comma-slot: the key
+        # is present, so the value is null (not "" and not skipped).
+        it "interprets an empty hash value (key, colon, no value) as null" do
+          expect(SmarterJSON.process("{a:}", acceleration: acceleration)).to eq({ "a" => nil })
+          expect(SmarterJSON.process('{"a":}', acceleration: acceleration)).to eq({ "a" => nil })
+          expect(SmarterJSON.process("{a:,b:2}", acceleration: acceleration)).to eq({ "a" => nil, "b" => 2 })
+          expect(SmarterJSON.process('{"":}', acceleration: acceleration)).to eq({ "" => nil })
+        end
+
         it "raises 'invalid number' on a lone sign with no digits" do
           expect { SmarterJSON.process("-", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
           expect { SmarterJSON.process("+", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
@@ -942,6 +996,22 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
         it "parses a hex number with lowercase a-f digits" do
           expect(SmarterJSON.process("0xabc", acceleration: acceleration)).to eq(0xabc)
+        end
+
+        # Regression (found by fuzzing): a token that is an exponent with no mantissa
+        # digit (e.g. "-e695881", "e399855") is NOT a number — it's a quoteless string.
+        # The Ruby path used to read it as 0.0 because DEC_RE made the mantissa optional.
+        it "treats a mantissa-less exponent token as a quoteless string, not 0.0" do
+          expect(SmarterJSON.process("[-e695881]", acceleration: acceleration)).to eq(["-e695881"])
+          expect(SmarterJSON.process("[e399855]", acceleration: acceleration)).to eq(["e399855"])
+        end
+
+        it "still parses valid numbers with exponents and leading/trailing dots" do
+          expect(SmarterJSON.process("[1e5]", acceleration: acceleration)).to eq([1e5])
+          expect(SmarterJSON.process("[.5]", acceleration: acceleration)).to eq([0.5])
+          expect(SmarterJSON.process("[5.]", acceleration: acceleration)).to eq([5.0])
+          expect(SmarterJSON.process("[-1.5e-3]", acceleration: acceleration)).to eq([-1.5e-3])
+          expect(SmarterJSON.process("[.5e3]", acceleration: acceleration)).to eq([500.0])
         end
 
         it "raises 'unexpected character' on a non-printable control byte" do

@@ -4,6 +4,7 @@ require "bigdecimal" # for bigdecimal_load: :auto / :bigdecimal (Oj-compatible)
 
 require_relative "smarter_json/version"
 require_relative "smarter_json/errors" # base Error + subclasses — must load before parser/generator
+require_relative "smarter_json/warning" # SmarterJSON::Warning value object (the warnings: option)
 require_relative "smarter_json/parser"
 require_relative "smarter_json/generator"
 

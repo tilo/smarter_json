@@ -4,9 +4,13 @@
 
 A lenient, fast JSON parser for Ruby. It parses strict JSON, JSON5, HJSON-style config, and the messy JSON-ish input humans actually write — and in benchmarks it matches or beats Oj on nearly every file. SmarterJSON is opinionated: we want your JSON processing to be successful. Other parsers are strict - they stop at the first deviation - SmarterJSON keeps going - it optimizes for getting your data out, not for policing the JSON spec.
 
+| SmarterJSON: one parser, no modes — want strict? please use stdlib json"
+
 ## Why SmarterJSON?
 
-Most JSON parsers reject anything that isn't perfectly strict JSON. SmarterJSON is built on the opposite principle: **you shouldn't have to care what flavor of JSON you were handed.** Give it strict JSON, JSON5, an HJSON-style config file, newline-delimited JSON, or a copy-pasted blob with comments and trailing commas — it just parses it.
+Most JSON parsers reject anything that isn't perfectly strict JSON. SmarterJSON is built on the opposite principle: **you shouldn't have to care what flavor of JSON you were handed** and **you shouldn't lose the whole document because of formatting errors.** Give it strict JSON, JSON5, an HJSON-style config file, newline-delimited JSON, or a copy-pasted blob with comments and trailing commas — it just parses it. When it is lenient, `smarter_json` isn't dropping data that exists, it's just not raising an eyebrow at a suspicious gap (like an extra comma). The strict parser would just refuses the whole document and recovers nothing - `smarter_json` returns everything but the formatting error.
+
+| For an ingestion tool, "reject the whole document because of one stray comma" is the worst outcome: you throw away the 99% that's fine to avoid maybe-mishandling a gap that carries no data anyway.
 
 Three things set it apart:
 

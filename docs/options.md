@@ -22,12 +22,27 @@ These options are passed to [`SmarterJSON.process`](./basic_read_api.md) and `Sm
 | `:bigdecimal_load`| `:auto`      | `:auto` keeps high-precision decimals as `BigDecimal` (matches Oj); `:float` forces every number to `Float`; `:bigdecimal` forces every decimal to `BigDecimal`. |
 | `:acceleration`   | `true`       | Use the C extension when it is compiled and loadable; `false` forces the pure-Ruby parser. Both produce identical results. |
 | `:encoding`       | `nil`        | Labels the input's encoding (e.g. `"UTF-8"`). It does **not** trigger a transcoding pass — see below.                  |
+| `:warnings`       | `false`      | When `true`, return `[result, warnings]` instead of just `result` — `warnings` lists the lenient fixes that were applied. See below. |
 
 ```ruby
 SmarterJSON.process('{"a": 1}', symbolize_keys: true)               # => {:a=>1}
 SmarterJSON.process('{"a":1,"a":2}', duplicate_key: :raise)         # raises SmarterJSON::ParseError
 SmarterJSON.process(big_decimal_json, bigdecimal_load: :float)      # every number as Float (fastest)
+SmarterJSON.process("[1,,2]", warnings: true)                       # => [[1, 2], [#<SmarterJSON::Warning ...>]]
 ```
+
+### A note on `:warnings`
+
+`smarter_json` is lenient by design — it salvages your data instead of rejecting the whole document over a stray comma. `warnings: true` keeps that, but also hands back a record of what it had to fix, so leniency is transparent rather than silent. The call then returns a two-element `[result, warnings]`; `warnings` is an Array of `SmarterJSON::Warning`, each with `type` (a Symbol), `message`, `line`, and `col`:
+
+```ruby
+result, warnings = SmarterJSON.process("[1,,2]", warnings: true)
+result                         # => [1, 2]
+warnings.map(&:type)           # => [:empty_slot]
+warnings.first.to_s            # => "extra comma, collapsed an empty slot at line 1, col 4"
+```
+
+The warning types are `:empty_slot` (a collapsed empty comma slot, e.g. `[1,,2]`), `:empty_value` (a key with no value, read as `null`, e.g. `{a:}`), and `:duplicate_key` (a repeated key that was dropped). Clean input returns an empty `warnings` array. Warnings work on both the C and pure-Ruby paths, so `acceleration:` doesn't change them.
 
 ### A note on `:encoding`
 

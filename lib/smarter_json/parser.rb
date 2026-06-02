@@ -57,9 +57,10 @@ module SmarterJSON
         Parser.new(input, options).each_value(&block)
       end
     elsif options.fetch(:acceleration, true) && HAS_ACCELERATION
-      parse_c(input, options)
+      parse_c(input, options) # returns [result, warnings] when options[:warnings]
     else
-      Parser.new(input, options).parse
+      parser = Parser.new(input, options)
+      options.fetch(:warnings, false) ? [parser.parse, parser.warnings] : parser.parse
     end
   end
 
@@ -124,7 +125,10 @@ module SmarterJSON
 
     NOT_NUMERIC = Object.new
     HEX_RE      = /\A[-+]?0[xX][0-9a-fA-F_]+\z/.freeze
-    DEC_RE      = /\A[-+]?(?:0|[1-9][0-9_]*)?(?:\.[0-9_]*)?(?:[eE][-+]?[0-9_]+)?\z/.freeze
+    # Mantissa must carry at least one digit (int part, or a leading-dot fraction), so a
+    # bare exponent like "-e695881" is NOT a number — it falls through to a quoteless
+    # string, matching the C path. Trailing exponent stays optional.
+    DEC_RE      = /\A[-+]?(?:(?:0|[1-9][0-9_]*)(?:\.[0-9_]*)?|\.[0-9_]+)(?:[eE][-+]?[0-9_]+)?\z/.freeze
     # A decimal BigDecimal() would reject as-is: a leading dot (".5") or a dot not
     # followed by a digit ("5.", "5.e3"). Matches iff normalize_for_bigdecimal
     # would change the string — so when it doesn't match, we skip normalization.
@@ -139,7 +143,13 @@ module SmarterJSON
       symbolize_keys: false, # Symbol keys instead of String
       duplicate_key: :last_wins, # :last_wins | :first_wins | :raise
       bigdecimal_load: :auto, # :auto | :float | :bigdecimal (Oj-compatible)
+      warnings: false, # collect non-fatal lenient fixes; process returns [result, warnings]
     }.freeze
+
+    # Warnings collected during the parse (empty slots, empty values, dropped duplicate
+    # keys). Empty unless the parser was built with warnings: true. Public so the module
+    # functions can read it after parse / each_value.
+    attr_reader :warnings
 
     def initialize(input, options = {})
       raise ArgumentError, "input must be a String" unless input.is_a?(String)
@@ -148,6 +158,8 @@ module SmarterJSON
       @symbolize_keys  = opts[:symbolize_keys]
       @duplicate_key   = opts[:duplicate_key]
       @bigdecimal_load = opts[:bigdecimal_load]
+      @collect_warnings = opts[:warnings]
+      @warnings = []
 
       encoding = opts[:encoding]
       @input = encoding ? input.dup.force_encoding(encoding) : input
@@ -221,6 +233,7 @@ module SmarterJSON
         at_top = false
       end
 
+      vss = false # warnings: has a value landed in the current container since the last separator?
       loop do
         skip_whitespace_and_comments
         b = byte
@@ -232,6 +245,7 @@ module SmarterJSON
             cur = root
             cur_obj = true
             at_top = false
+            vss = false
           elsif b == LBRACKET
             advance(1)
             root = []
@@ -239,11 +253,19 @@ module SmarterJSON
             cur = root
             cur_obj = false
             at_top = false
+            vss = false
           elsif b.nil?
             raise error("unexpected end of input")
           else
             return parse_value
           end
+        elsif b == COMMA
+          # Commas are collapsing separators inside a container: an empty slot (leading,
+          # interior, or trailing comma) adds nothing. Skip it; the next iteration reads
+          # the following value/key or the closing bracket.
+          warn(:empty_slot, "extra comma — collapsed an empty slot") unless vss
+          vss = false
+          advance(1)
         elsif cur_obj
           if b == RBRACE
             advance(1)
@@ -252,7 +274,7 @@ module SmarterJSON
 
             cur = stack.last
             cur_obj = cur.is_a?(Hash)
-            skip_separator_run
+            vss = true # the just-closed container is a value in its parent
           elsif b.nil?
             return root if implicit_root && stack.size == 1
 
@@ -274,11 +296,17 @@ module SmarterJSON
               stack.push(child)
               cur = child
               cur_obj = (b == LBRACE)
+              vss = false
+            elsif [RBRACE, COMMA].include?(b)
+              # key with a colon but no value -> null (don't consume } or ,; the loop does)
+              store_member(cur, key, nil)
+              warn(:empty_value, "key #{key.inspect} had no value — used null")
+              vss = true
             elsif b.nil?
               raise error("unexpected end of input")
             else
               store_member(cur, key, parse_member_value)
-              skip_separator_run
+              vss = true
             end
           end
         else # array
@@ -289,7 +317,7 @@ module SmarterJSON
 
             cur = stack.last
             cur_obj = cur.is_a?(Hash)
-            skip_separator_run
+            vss = true # the just-closed container is a value in its parent
           elsif b.nil?
             raise error("unterminated array")
           elsif b == RBRACE
@@ -301,9 +329,10 @@ module SmarterJSON
             stack.push(child)
             cur = child
             cur_obj = (b == LBRACE)
+            vss = false
           else
             cur.push(parse_member_value)
-            skip_separator_run
+            vss = true
           end
         end
       end
@@ -459,14 +488,6 @@ module SmarterJSON
 
     # Layer 1 (strict JSON) shape: whitespace + at most one comma + whitespace.
     # The Lenient Commas Option becomes a one-line change here.
-    def skip_separator_run
-      skip_whitespace_and_comments
-      return unless byte == COMMA
-
-      advance(1)
-      skip_whitespace_and_comments
-    end
-
     # --- values ---
 
     # Top-level / strict value: no quoteless fallback.
@@ -550,10 +571,10 @@ module SmarterJSON
     def store_member(hash, key, value)
       k = @symbolize_keys ? key.to_sym : key
       if hash.key?(k)
-        case @duplicate_key
-        when :first_wins then return
-        when :raise      then raise error("duplicate key #{k.inspect}")
-        end
+        raise error("duplicate key #{k.inspect}") if @duplicate_key == :raise
+
+        warn(:duplicate_key, "duplicate key #{k.inspect} — #{@duplicate_key}")
+        return if @duplicate_key == :first_wins
       end
       hash[k] = value
     end
@@ -807,7 +828,10 @@ module SmarterJSON
       raise error("incomplete \\u escape") if i + 4 >= @bytesize
 
       hex = @input.byteslice(i + 1, 4)
-      raise error("invalid \\u escape") unless hex =~ /\A\h{4}\z/
+      # Match on a binary view: the 4 bytes may split a raw multibyte character, and a
+      # regex on an invalid-UTF-8 String raises ArgumentError. On binary, non-hex bytes
+      # simply fail the match and we raise a clean ParseError below.
+      raise error("invalid \\u escape") unless hex.b.match?(/\A\h{4}\z/)
 
       cp = hex.to_i(16)
       consumed = 5
@@ -817,7 +841,7 @@ module SmarterJSON
         end
 
         hex2 = @input.byteslice(i + consumed + 2, 4)
-        raise error("invalid low surrogate \\u escape") unless hex2 && hex2.bytesize == 4 && hex2 =~ /\A\h{4}\z/
+        raise error("invalid low surrogate \\u escape") unless hex2 && hex2.bytesize == 4 && hex2.b.match?(/\A\h{4}\z/)
 
         cp2 = hex2.to_i(16)
         raise error("invalid low surrogate value") unless cp2 >= 0xDC00 && cp2 <= 0xDFFF
@@ -907,6 +931,13 @@ module SmarterJSON
     def parse_literal_keyword(word, value)
       consume_keyword!(word)
       value
+    end
+
+    # Record a non-fatal lenient fix (only when built with warnings: true).
+    def warn(type, message)
+      return unless @collect_warnings
+
+      @warnings << Warning.new(type, message, @line, @col)
     end
 
     def error(message)

@@ -32,6 +32,11 @@
 static VALUE mSmarterJSON;
 static VALUE cParseError;
 static VALUE cEncodingError;
+static VALUE cWarning;
+static ID    fj_new_id;
+static VALUE fj_sym_empty_slot;
+static VALUE fj_sym_empty_value;
+static VALUE fj_sym_duplicate_key;
 static ID    fj_bigdecimal_id; /* cached BigDecimal() method id (set in Init) */
 static ID    fj_to_sym_id;     /* cached :to_sym (symbolize_keys) */
 static ID    fj_key_p_id;      /* cached :key? (non-default duplicate_key modes) */
@@ -55,6 +60,8 @@ typedef struct {
   int dup_raise;
   int bigdecimal_load;  /* 0 = float, 1 = auto, 2 = bigdecimal */
   fj_kc_slot *kcache;   /* per-parse key cache (NULL when interning unavailable) */
+  int collect_warnings; /* warnings: option — record non-fatal lenient fixes */
+  VALUE warnings;       /* rb_ary of SmarterJSON::Warning when collecting, else Qnil */
 } fj_state;
 
 /* Line/column at the current byte position, computed lazily (only when raising
@@ -72,6 +79,16 @@ static void fj_line_col(fj_state *st, long *line, long *col) {
   }
   *line = l;
   *col = c;
+}
+
+/* Record a non-fatal lenient fix — only when the parse was given warnings: true. */
+static void fj_warn(fj_state *st, VALUE type_sym, const char *msg) {
+  long line, col;
+  if (!st->collect_warnings) return;
+  fj_line_col(st, &line, &col);
+  rb_ary_push(st->warnings,
+              rb_funcall(cWarning, fj_new_id, 4, type_sym,
+                         rb_utf8_str_new_cstr(msg), LONG2NUM(line), LONG2NUM(col)));
 }
 
 /* 1-based column of the current byte position (bytes since the last line start).
@@ -1144,7 +1161,9 @@ static VALUE fj_build_object(fj_state *st, const VALUE *pairs, long count) {
   long  entries = count / 2, i;
   VALUE hash    = rb_hash_new_capa(entries);
 
-  if (!st->symbolize_keys && !st->dup_first_wins) {
+  /* Fast path: bulk insert. Skipped when collecting warnings, which needs the
+   * per-member loop below to report each dropped duplicate key. */
+  if (!st->symbolize_keys && !st->dup_first_wins && !st->collect_warnings) {
     rb_hash_bulk_insert(count, pairs, hash);
     if (st->dup_raise && fj_hash_len(hash) < entries) {
       VALUE seen = rb_hash_new_capa(entries);
@@ -1159,10 +1178,11 @@ static VALUE fj_build_object(fj_state *st, const VALUE *pairs, long count) {
 
   for (i = 0; i + 1 < count; i += 2) {
     VALUE k = st->symbolize_keys ? rb_funcall(pairs[i], fj_to_sym_id, 0) : pairs[i];
-    if (st->dup_first_wins || st->dup_raise) {
+    if (st->dup_first_wins || st->dup_raise || st->collect_warnings) {
       if (RTEST(rb_funcall(hash, fj_key_p_id, 1, k))) {
+        if (st->dup_raise) fj_error(st, "duplicate key");
+        fj_warn(st, fj_sym_duplicate_key, "duplicate key");
         if (st->dup_first_wins) continue;
-        fj_error(st, "duplicate key");
       }
     }
     rb_hash_aset(hash, k, pairs[i + 1]);
@@ -1221,6 +1241,7 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
   fj_pstack *ps;
   VALUE      ps_obj = TypedData_Make_Struct(rb_cObject, fj_pstack, &fj_pstack_type, ps);
   VALUE      result = Qnil;
+  int        vss = 0; /* warnings: has a value landed in the current container since the last separator? */
 
   ps->vptr = ALLOC_N(VALUE, 64);    ps->vhead = 0; ps->vcapa = 64;
   ps->fptr = ALLOC_N(fj_frame, 16); ps->fhead = 0; ps->fcapa = 16;
@@ -1235,8 +1256,8 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
     if (ps->fhead == 0) { /* top level: parse exactly one value */
       fj_skip_ws_comments(st);
       b = fj_byte(st);
-      if (b == '{') { fj_advance(st, 1); fj_fpush(ps, ps->vhead, 1); continue; }
-      if (b == '[') { fj_advance(st, 1); fj_fpush(ps, ps->vhead, 0); continue; }
+      if (b == '{') { fj_advance(st, 1); fj_fpush(ps, ps->vhead, 1); vss = 0; continue; }
+      if (b == '[') { fj_advance(st, 1); fj_fpush(ps, ps->vhead, 0); vss = 0; continue; }
       if (b == -1) fj_error(st, "unexpected end of input");
       result = fj_parse_value(st);
       break;
@@ -1249,6 +1270,12 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
       VALUE key;
       fj_skip_ws_comments(st);
       b = fj_byte(st);
+      if (b == ',') { /* collapsing separator: skip empty member */
+        if (st->collect_warnings && !vss) fj_warn(st, fj_sym_empty_slot, "extra comma, collapsed an empty slot");
+        vss = 0;
+        fj_advance(st, 1);
+        continue;
+      }
       if (b == '}') {
         VALUE hash;
         fj_advance(st, 1);
@@ -1257,8 +1284,7 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
         ps->fhead--;
         if (ps->fhead == 0) { result = hash; break; }
         fj_vpush(ps, hash);
-        fj_skip_ws_comments(st);
-        if (fj_byte(st) == ',') fj_advance(st, 1);
+        vss = 1;
         continue;
       }
       if (b == -1) {
@@ -1279,16 +1305,29 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
         fj_vpush(ps, key);
         fj_advance(st, 1);
         fj_fpush(ps, ps->vhead, (b == '{'));
+        vss = 0;
+        continue;
+      }
+      if (b == '}' || b == ',') { /* key with a colon but no value -> null */
+        fj_vpush(ps, key);
+        fj_vpush(ps, Qnil);
+        fj_warn(st, fj_sym_empty_value, "empty value, used null");
+        vss = 1;
         continue;
       }
       if (b == -1) fj_error(st, "unexpected end of input");
       fj_vpush(ps, key);
       fj_vpush(ps, fj_parse_member_value(st));
-      fj_skip_ws_comments(st); /* skip_separator_run */
-      if (fj_byte(st) == ',') fj_advance(st, 1);
+      vss = 1;
     } else { /* array */
       fj_skip_ws_comments(st);
       b = fj_byte(st);
+      if (b == ',') { /* collapsing separator: skip empty slot */
+        if (st->collect_warnings && !vss) fj_warn(st, fj_sym_empty_slot, "extra comma, collapsed an empty slot");
+        vss = 0;
+        fj_advance(st, 1);
+        continue;
+      }
       if (b == ']') {
         VALUE ary;
         fj_advance(st, 1);
@@ -1297,8 +1336,7 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
         ps->fhead--;
         if (ps->fhead == 0) { result = ary; break; }
         fj_vpush(ps, ary);
-        fj_skip_ws_comments(st);
-        if (fj_byte(st) == ',') fj_advance(st, 1);
+        vss = 1;
         continue;
       }
       if (b == -1) fj_error(st, "unterminated array");
@@ -1306,11 +1344,11 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
       if (b == '{' || b == '[') {
         fj_advance(st, 1);
         fj_fpush(ps, ps->vhead, (b == '{'));
+        vss = 0;
         continue;
       }
       fj_vpush(ps, fj_parse_member_value(st));
-      fj_skip_ws_comments(st); /* skip_separator_run */
-      if (fj_byte(st) == ',') fj_advance(st, 1);
+      vss = 1;
     }
   }
 
@@ -1374,6 +1412,9 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
     else st.bigdecimal_load = 1; /* :auto (default), including nil */
   }
 
+  st.collect_warnings = RTEST(rb_hash_aref(opts, ID2SYM(rb_intern("warnings"))));
+  st.warnings = st.collect_warnings ? rb_ary_new() : Qnil;
+
   if (st.len >= 3 && (unsigned char)st.buf[0] == 0xEF &&
       (unsigned char)st.buf[1] == 0xBB && (unsigned char)st.buf[2] == 0xBF) {
     st.pos = 3;
@@ -1398,10 +1439,10 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
    * whitespace / newline / concatenation do), so a bracketless comma list still
    * raises in fj_parse_iter — the unsupported implicit-root array. */
   fj_skip_ws_comments(&st);
-  if (fj_eof(&st)) return Qnil;
+  if (fj_eof(&st)) return st.collect_warnings ? rb_assoc_new(Qnil, st.warnings) : Qnil;
   value = fj_parse_iter(&st, fj_implicit_root_ahead(&st));
   fj_skip_ws_comments(&st);
-  if (fj_eof(&st)) return value;
+  if (fj_eof(&st)) return st.collect_warnings ? rb_assoc_new(value, st.warnings) : value;
   {
     VALUE arr = rb_ary_new();
     rb_ary_push(arr, value);
@@ -1409,7 +1450,7 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
       rb_ary_push(arr, fj_parse_iter(&st, fj_implicit_root_ahead(&st)));
       fj_skip_ws_comments(&st);
     } while (!fj_eof(&st));
-    return arr;
+    return st.collect_warnings ? rb_assoc_new(arr, st.warnings) : arr;
   }
 }
 
@@ -1417,8 +1458,13 @@ void Init_smarter_json(void) {
   mSmarterJSON = rb_define_module("SmarterJSON");
   cParseError = rb_const_get(mSmarterJSON, rb_intern("ParseError"));
   cEncodingError = rb_const_get(mSmarterJSON, rb_intern("EncodingError"));
+  cWarning = rb_const_get(mSmarterJSON, rb_intern("Warning"));
   fj_bigdecimal_id = rb_intern("BigDecimal");
   fj_to_sym_id = rb_intern("to_sym");
   fj_key_p_id = rb_intern("key?");
+  fj_new_id = rb_intern("new");
+  fj_sym_empty_slot = ID2SYM(rb_intern("empty_slot"));
+  fj_sym_empty_value = ID2SYM(rb_intern("empty_value"));
+  fj_sym_duplicate_key = ID2SYM(rb_intern("duplicate_key"));
   rb_define_module_function(mSmarterJSON, "parse_c", fj_parse_c, 2);
 }
