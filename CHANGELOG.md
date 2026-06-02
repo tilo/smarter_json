@@ -9,12 +9,12 @@
 - Fixed a pure-Ruby bug where a `\u` escape whose next bytes split a multibyte character leaked `ArgumentError`; it now raises `SmarterJSON::ParseError`.
 - Added a property/fuzz test suite that checks C/Ruby parity and round-tripping on generated, mutated, and random input.
 
-## 0.5.2 (2026-06-01)
+## 0.5.2 (2026-06-01) yanked
 - `generate` now supports pretty-printing via the `indent:` option (spaces per nesting level; default `0` = compact). Empty objects/arrays stay inline; `indent:` combined with `format: :ndjson` raises `ArgumentError`.
 - `generate` adds `sort_keys:` (emit object keys in sorted order), `ascii_only:` (escape non-ASCII as `\uXXXX`, astral chars as surrogate pairs), and `script_safe:` (escape `</` and U+2028/U+2029 for safe embedding in an HTML `<script>` tag).
 - `generate` adds opt-in `coerce:` — when `true`, a value that isn't natively supported (e.g. `Time`, `Date`, app objects) is converted via its own `as_json` (result re-emitted) or `to_json` (spliced); strict-by-default still raises `GenerateError`.
 
-## 0.5.1 (2026-06-01)
+## 0.5.1 (2026-06-01) yanked
 - Unified the error classes under a single `SmarterJSON::Error` base: `ParseError` and `EncodingError` now inherit from it, and `generate` raises a new `GenerateError`. `rescue SmarterJSON::Error` now catches everything the gem raises.
 - Added a CI test matrix (Ruby 2.6–4.0 + head, on Ubuntu and macOS).
 - Fixed the C extension build on Ruby 2.6 (declare `rb_hash_bulk_insert`, which 2.6 exports but does not declare in its headers); set the minimum Ruby to 2.6.
