@@ -46,6 +46,12 @@ gem install smarter_json
 
 The C extension is built on install and used automatically. On platforms where it can't build, the pure-Ruby parser runs instead and produces identical results.
 
+## API stability and thread safety
+
+The public API is now considered stable: `SmarterJSON.process`, `SmarterJSON.process_file`, `SmarterJSON.generate`, and the documented options in this README/docs are the supported surface.
+
+Concurrent calls are safe. The parser/generator keep per-call state local, and the C extension only caches Ruby IDs / constants at load time; it does not share mutable parse state across calls.
+
 ## Documentation
 
   * [Introduction](docs/_introduction.md)
