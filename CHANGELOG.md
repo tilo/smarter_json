@@ -6,13 +6,13 @@
 ## 0.9.2 (2026-06-03)
 - **Fix a residual performance regression affecting every large document.** The "leading label" check (for `JSON: {…}`, which parses successfully but wrongly as an implicit-root object) now uses `String#start_with?(/…/)` instead of `match?(/\A…/)`. A `\A`-anchored `match?` is **not** anchor-optimized — it retries at every byte position and so scanned the entire input (~0.3 s on a 200 MB document) on every parse, which had quietly taxed every large file since the wrapper was introduced (deeply_nested.json and big_decimals.json sat well below their 0.6.0 throughput even after 0.9.1). `start_with?` inspects only the beginning, restoring — and slightly exceeding — 0.6.0 throughput across the board.
 
-## 0.9.1 (2026-06-03)
+## 0.9.1 (2026-06-03 unreleased)
 - **Fix a major performance regression on real-world data** (introduced with the 0.8.0 wrapper recovery). Wrapper recovery is now **reactive**: input is parsed first, and the markdown-fence / `<json>` / prose extraction runs only when that parse actually fails. Before, any input that merely *contained* ` ``` ` or `<json>` anywhere — including inside ordinary JSON string values, as GitHub-event payloads and other markdown-bearing data routinely do — was dragged through a full pure-Ruby recovery scan plus a double parse on every call (~30–45× slower on those files). A bare leading label like `JSON: {…}`, which parses successfully but wrongly, is still caught up front before parsing.
 - **Streaming framer**: a multi-byte marker (`//`, `/*`, `'''`, `*/`) whose bytes straddle a read-chunk boundary is no longer mis-scanned — the framer waits for the rest of the marker before deciding, so a brace inside such a comment/string can no longer end a document early.
 - Wrapper warnings (`code_fence_stripped` / `wrapper_tag_stripped`) now fire only when the marker is actually in the stripped text, not when it sits inside a recovered payload's own string value.
 - Shared `SmarterJSON::Bytes` constants for the parser and the framer / recovery scanners (no raw hex byte literals).
 
-## 0.9.0 (2026-06-03)
+## 0.9.0 (2026-06-03 unreleased)
 - performance improvements
 - code cleanup
 
