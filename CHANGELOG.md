@@ -4,6 +4,7 @@
 > 🚧 Getting ready for the 1.0.0 release - sorry for the interface changes - thank you for your patience! 🚧
 
 ## 0.9.3 (2026-06-03)
+- **Faster whitespace skipping on pretty-printed input (C extension).** Runs of indentation — spaces *or* tabs, the two common styles — are now skipped 8 bytes at a time with a single 64-bit compare, instead of byte-by-byte. Profiling `citm_catalog.json` (heavily-indented) showed whitespace skipping was the single largest slice of parse time; this lifts it ~10–15% locally (≈700 → ≈800 MB/s) with no behavior change. Compact JSON (little whitespace) is unaffected.
 - **Removed the `duplicate_key: :raise` option.** Raising on a repeated key is strict-validation policing, which runs against SmarterJSON's "extract the data, don't police the spec" philosophy — for strict behavior, use the stdlib `json` gem. `duplicate_key:` now accepts only `:last_wins` (default) and `:first_wins`. Every repeated key is still reported through `on_warning` (`:duplicate_key`), so callers that need to detect duplicates (e.g. for the duplicate-key security concern) can observe and decide for themselves without rejecting the whole document.
 
 ## 0.9.2 (2026-06-03)

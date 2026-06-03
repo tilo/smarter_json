@@ -166,20 +166,39 @@ static long fj_mbws(const char *p, long n) {
   return 0;
 }
 
+/* Skip a run of whitespace. This is hot on pretty-printed input, where most of
+ * the bytes are indentation. Indentation is homogeneous — all spaces OR all tabs,
+ * the two common styles — so a run of it is skipped 8 bytes at a time with a
+ * single 64-bit compare (the uniform-byte patterns read the same regardless of
+ * endianness). Everything else — newlines, CR, short/partial runs, and Unicode
+ * whitespace — falls to the tight byte loop, which also avoids the per-byte helper
+ * calls (fj_byte / fj_is_ws / fj_advance) the previous byte-at-a-time version paid.
+ * The set of bytes treated as whitespace is unchanged. */
 static void fj_skip_pure_ws(fj_state *st) {
+  const char *p   = st->buf + st->pos;
+  const char *end = st->buf + st->len;
   for (;;) {
-    int b = fj_byte(st);
-    if (b == -1) break;
-    if (fj_is_ws(b)) {
-      fj_advance(st, 1);
-    } else if (b >= 0x80) {
-      long m = fj_mbws(st->buf + st->pos, st->len - st->pos);
-      if (m == 0) break;
-      st->pos += m;
-    } else {
+    while (end - p >= 8) {
+      uint64_t w;
+      memcpy(&w, p, 8);
+      if (w == 0x2020202020202020ULL || w == 0x0909090909090909ULL) { p += 8; continue; }
       break;
     }
+    if (p >= end) break;
+    {
+      unsigned char b = (unsigned char)*p;
+      if (b == 0x20 || (b >= 0x09 && b <= 0x0D)) {
+        p++;
+      } else if (b >= 0x80) {
+        long m = fj_mbws(p, end - p);
+        if (m == 0) break;
+        p += m;
+      } else {
+        break;
+      }
+    }
   }
+  st->pos = p - st->buf;
 }
 
 /* A comment marker only starts a comment when preceded by whitespace or at the
