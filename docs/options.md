@@ -43,7 +43,7 @@ warns.map(&:type)              # => [:empty_slot]
 warns.first.to_s               # => "extra comma, collapsed an empty slot at line 1, col 4"
 ```
 
-The warning types are `:empty_slot` (a collapsed empty comma slot, e.g. `[1,,2]`), `:empty_value` (a key with no value, read as `null`, e.g. `{a:}`), and `:duplicate_key` (a repeated key that was dropped). Clean input never invokes the handler. Warnings work on both the C and pure-Ruby paths, so `acceleration:` doesn't change them.
+The warning types are `:empty_slot` (a collapsed empty comma slot, e.g. `[1,,2]`), `:empty_value` (a key with no value, read as `null`, e.g. `{a:}`), and `:duplicate_key` (a repeated key that was dropped), plus wrapper-recovery warnings such as `:code_fence_stripped`, `:prefix_text_ignored`, `:suffix_text_ignored`, and `:wrapper_tag_stripped`. Clean input never invokes the handler. Warnings work on both the C and pure-Ruby paths, so `acceleration:` doesn't change them.
 
 ### A note on `:encoding`
 

@@ -24,9 +24,10 @@
 7. [Duplicate Keys](#example-7-duplicate-keys)
 8. [High-Precision Numbers: BigDecimal vs Float](#example-8-high-precision-numbers-bigdecimal-vs-float)
 9. [Lenient Input: Comments, Trailing Commas, Unquoted Keys](#example-9-lenient-input-comments-trailing-commas-unquoted-keys)
-10. [Write JSON](#example-10-write-json)
-11. [Write NDJSON](#example-11-write-ndjson)
-12. [Round-Trip Read and Write](#example-12-round-trip-read-and-write)
+10. [Wrapper Noise Around a Payload](#example-10-wrapper-noise-around-a-payload)
+11. [Write JSON](#example-11-write-json)
+12. [Write NDJSON](#example-12-write-ndjson)
+13. [Round-Trip Read and Write](#example-13-round-trip-read-and-write)
 
 ---
 
@@ -64,9 +65,9 @@ SmarterJSON.process('{"id":1}')                          # => {"id"=>1}
 SmarterJSON.process("")                                  # => nil
 ```
 
-### Example 5: Streaming a Large File with a Block
+### Example 5: Iterate Documents with a Block
 
-For input larger than memory, pass a block. Each document is yielded as it is read; the whole file is never loaded:
+Pass a block to receive each recovered document one at a time:
 
 ```ruby
 SmarterJSON.process_file("events.ndjson") { |event| EventJob.perform_async(event) }
@@ -113,14 +114,41 @@ JSON
 
 A `#`/`//` only starts a comment when preceded by whitespace, so `http://example.com` stays a string rather than being truncated.
 
-### Example 10: Write JSON
+### Example 10: Wrapper Noise Around a Payload
+
+```ruby
+SmarterJSON.process(<<~TEXT)
+  Here is the JSON:
+
+  ```json
+  {
+    "a": 1
+  }
+  ```
+TEXT
+# => {"a"=>1}
+
+SmarterJSON.process("<json>{\"a\":1}</json>")
+# => {"a"=>1}
+
+SmarterJSON.process(<<~TEXT)
+  first:
+  {"a":1}
+
+  second:
+  {"b":2}
+TEXT
+# => [{"a"=>1}, {"b"=>2}]
+```
+
+### Example 11: Write JSON
 
 ```ruby
 SmarterJSON.generate({ "a" => 1, "b" => [2, 3] })   # => '{"a":1,"b":[2,3]}'
 SmarterJSON.generate([1, 2, 3])                       # => '[1,2,3]'
 ```
 
-### Example 11: Write NDJSON
+### Example 12: Write NDJSON
 
 An Array writes one element per line:
 
@@ -128,7 +156,7 @@ An Array writes one element per line:
 SmarterJSON.generate([{ "id" => 1 }, { "id" => 2 }], format: :ndjson)   # => "{\"id\":1}\n{\"id\":2}\n"
 ```
 
-### Example 12: Round-Trip Read and Write
+### Example 13: Round-Trip Read and Write
 
 ```ruby
 obj = { "a" => 1, "b" => [2, "three", nil, true] }

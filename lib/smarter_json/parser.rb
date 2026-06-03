@@ -22,9 +22,9 @@ module SmarterJSON
   # stream as newline-delimited documents (NDJSON / JSONL), one per line.
   def process(input, options = {}, &block)
     if input.is_a?(String)
-      process_content(input, options, &block)
+      Recovery.process_string(input, options, &block)
     elsif input.respond_to?(:read)
-      block ? stream_io(input, options, &block) : process_content(input.read, options)
+      block ? stream_io(input, options, &block) : process(input.read, options)
     else
       raise ArgumentError, "SmarterJSON.process expects a String or an IO, got #{input.class}"
     end
@@ -43,7 +43,7 @@ module SmarterJSON
     if block
       File.open(path, "r:#{encoding}") { |io| stream_io(io, options, &block) }
     else
-      process_content(File.read(path, encoding: encoding), options)
+      process(File.read(path, encoding: encoding), options)
     end
   end
 
@@ -67,11 +67,229 @@ module SmarterJSON
   # each — bounded memory. Newline-delimited (NDJSON / JSONL); a single document
   # spanning multiple lines is not supported by the streaming path.
   def stream_io(io, options, &block)
-    io.each_line("\n") { |line| process_content(line, options, &block) }
-    nil
+    Recovery.process_string(io.read, options, &block)
   end
 
   private_class_method :process_content, :stream_io
+
+  module Recovery
+    module_function
+
+    def process_string(input, options, &block)
+      return SmarterJSON.send(:process_content, input, options, &block) unless input.valid_encoding?
+
+      if wrapper_hint?(input)
+        payloads = extract_payloads(input, options)
+        return replay_payloads(payloads, options, &block) unless payloads.empty?
+      end
+
+      SmarterJSON.send(:process_content, input, options, &block)
+    rescue ParseError => e
+      raise if e.is_a?(EncodingError)
+
+      payloads = extract_payloads(input, options)
+      return replay_payloads(payloads, options, &block) unless payloads.empty?
+
+      raise
+    end
+
+    def wrapper_hint?(input)
+      return false unless input.valid_encoding?
+
+      input.match?(/```|<json\b|BEGIN_JSON\b/i) || input.match?(/\A[[:space:]]*(?:JSON|Final answer)[[:space:]]*:/i)
+    end
+
+    def replay_payloads(payloads, options, &block)
+      handler = options[:on_warning]
+      emit_wrapper_warnings(payloads, handler)
+
+      results = payloads.map do |payload|
+        SmarterJSON.send(:process_content, payload[:slice], options)
+      end
+
+      return results.each(&block).then { nil } if block_given?
+      return nil if results.empty?
+      return results.first if results.length == 1
+
+      results
+    end
+
+    def emit_wrapper_warnings(payloads, handler)
+      return unless handler
+
+      meta = payloads.first[:meta]
+      warn(handler, :prefix_text_ignored, "ignored non-JSON text before the payload", *meta[:first_pos]) if meta[:prefix]
+      warn(handler, :code_fence_stripped, "stripped markdown code fences around the payload", *meta[:first_pos]) if meta[:fence]
+      warn(handler, :wrapper_tag_stripped, "stripped wrapper tags around the payload", *meta[:first_pos]) if meta[:wrapper]
+      warn(handler, :suffix_text_ignored, "ignored non-JSON text after the payload", *meta[:last_pos]) if meta[:suffix]
+    end
+
+    def extract_payloads(input, options)
+      payloads = candidate_ranges(input).filter_map do |range|
+        slice = input.byteslice(range.begin, range.end - range.begin)
+        begin
+          SmarterJSON.send(:process_content, slice, options.merge(on_warning: nil))
+          { slice: slice, range: range }
+        rescue ParseError
+          nil
+        end
+      end
+      meta = wrapper_meta(input, payloads.map { |p| p[:range] })
+      payloads.each { |payload| payload[:meta] = meta }
+      payloads
+    end
+
+    def wrapper_meta(input, ranges)
+      return { prefix: false, suffix: false, fence: false, wrapper: false } if ranges.empty?
+
+      first = ranges.first
+      last = ranges.last
+      prefix = input.byteslice(0, first.begin)
+      suffix = input.byteslice(last.end, input.bytesize - last.end)
+      {
+        prefix: substantive_text?(prefix),
+        suffix: substantive_text?(suffix),
+        fence: input.match?(/```/),
+        wrapper: input.match?(/<json\b|BEGIN_JSON\b/i),
+        first_pos: line_col_for(input, first.begin),
+        last_pos: line_col_for(input, last.begin)
+      }
+    end
+
+    def line_col_for(input, offset)
+      line = 1
+      col = 1
+      i = 0
+      while i < offset
+        b = input.getbyte(i)
+        break if b.nil?
+
+        if b == 0x0A
+          line += 1
+          col = 1
+          i += 1
+        elsif b == 0x0D
+          line += 1
+          col = 1
+          i += 1
+          i += 1 if i < offset && input.getbyte(i) == 0x0A
+        else
+          col += 1
+          i += 1
+        end
+      end
+      [line, col]
+    end
+
+    def substantive_text?(text)
+      return false if text.nil? || text.empty?
+
+      stripped = text.dup
+      stripped.gsub!(%r{/\*.*?\*/}m, "")
+      stripped.gsub!(/^\s*(?:#|\/\/).*$/, "")
+      !stripped.strip.empty? && !stripped.strip.match?(/\A(?:```[a-zA-Z0-9_-]*)?\z/) && !stripped.strip.match?(/\A(?:<\/?json>|BEGIN_JSON|END_JSON)\z/i)
+    end
+
+    def warn(handler, type, message, line, col)
+      handler.call(Warning.new(type, message, line, col))
+    end
+
+    def candidate_ranges(input)
+      ranges = []
+      stack = []
+      start_pos = nil
+      i = 0
+      mode = nil
+      while i < input.bytesize
+        b = input.getbyte(i)
+        if mode == :double
+          if b == 0x5C
+            i += 2
+            next
+          elsif b == 0x22
+            mode = nil
+          end
+          i += 1
+          next
+        elsif mode == :single
+          if b == 0x5C
+            i += 2
+            next
+          elsif b == 0x27
+            mode = nil
+          end
+          i += 1
+          next
+        elsif mode == :triple
+          if input.byteslice(i, 3) == "'''"
+            mode = nil
+            i += 3
+          else
+            i += 1
+          end
+          next
+        elsif mode == :line_comment
+          if [0x0A, 0x0D].include?(b)
+            mode = nil
+          else
+            i += 1
+            next
+          end
+        elsif mode == :block_comment
+          if input.byteslice(i, 2) == "*/"
+            mode = nil
+            i += 2
+          else
+            i += 1
+          end
+          next
+        else
+          if input.byteslice(i, 2) == "//"
+            mode = :line_comment
+            i += 2
+            next
+          elsif input.byteslice(i, 2) == "/*"
+            mode = :block_comment
+            i += 2
+            next
+          elsif b == 0x23
+            mode = :line_comment
+            i += 1
+            next
+          elsif b == 0x22
+            mode = :double
+            i += 1
+            next
+          elsif input.byteslice(i, 3) == "'''"
+            mode = :triple
+            i += 3
+            next
+          elsif b == 0x27
+            mode = :single
+            i += 1
+            next
+          elsif [0x7B, 0x5B].include?(b)
+            start_pos = i if stack.empty?
+            stack << b
+          elsif b == 0x7D
+            stack.pop if stack.last == 0x7B
+            if stack.empty? && start_pos
+              ranges << (start_pos...(i + 1))
+              start_pos = nil
+            end
+          elsif b == 0x5D
+            stack.pop if stack.last == 0x5B
+            if stack.empty? && start_pos
+              ranges << (start_pos...(i + 1))
+              start_pos = nil
+            end
+          end
+        end
+        i += 1
+      end
+      ranges
+    end
+  end
 
   # Hand-rolled FSM single-pass parser.
   # Layer 1: strict JSON (RFC 8259).

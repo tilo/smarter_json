@@ -11,7 +11,7 @@
 
 # SmarterJSON Introduction
 
-`smarter_json` is a fast, lenient JSON parser and writer for Ruby. It reads strict JSON, JSON5, HJSON-style config, newline-delimited JSON (NDJSON / JSONL), and the messy JSON-ish input humans actually paste — and in benchmarks it matches or beats Oj on nearly every file. It is opinionated: it optimizes for getting your data out, not for policing the JSON spec. Where other parsers stop at the first deviation, SmarterJSON keeps going.
+`smarter_json` is a fast, lenient JSON parser and writer for Ruby. It reads strict JSON, JSON5, HJSON-style config, newline-delimited JSON (NDJSON / JSONL), markdown-wrapped / chatty blobs around a JSON payload, and the messy JSON-ish input humans actually paste — and in benchmarks it matches or beats Oj on nearly every file. It is opinionated: it optimizes for getting your data out, not for policing the JSON spec. Where other parsers stop at the first deviation, SmarterJSON keeps going.
 
 ## Why another JSON library?
 
@@ -21,7 +21,7 @@ Most JSON parsers reject anything that isn't perfectly strict JSON, and they mak
 
 * **One reader, no modes, no flags.** There is no `dialect:` option and no "strict mode" — `SmarterJSON.process(input)` accepts the whole superset, and strict JSON is simply the narrowest case. You don't configure the reader to match your input; it adapts to whatever you give it.
 
-* **It reads multi-document input automatically — a distinguishing feature.** `SmarterJSON.process` handles NDJSON / JSONL / concatenated JSON with **no block and no special method**: zero documents returns `nil`, one document returns its value, two or more return an `Array`. **Only SmarterJSON reads multi-document input via plain `process` — Oj and the stdlib `json` library raise without a block.** For input larger than memory, pass a block to stream one document at a time. See [The Basic Read API](./basic_read_api.md).
+* **It reads multi-document input automatically — a distinguishing feature.** `SmarterJSON.process` handles NDJSON / JSONL / concatenated JSON with **no block and no special method**: zero documents returns `nil`, one document returns its value, two or more return an `Array`. The same rule applies when wrapper noise is stripped and several payloads are recovered from one blob. **Only SmarterJSON reads multi-document input via plain `process` — Oj and the stdlib `json` library raise without a block.** Pass a block to iterate the recovered documents one at a time. See [The Basic Read API](./basic_read_api.md).
 
 * **It's fast.** A C extension (with a pure-Ruby fallback that runs everywhere) puts it ahead of Oj on nearly every file we benchmark, and competitive with the stdlib `json` C parser. Floats are parsed with Ryū (correctly rounded, single-pass), so number-heavy data is fast and bit-exact.
 

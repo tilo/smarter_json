@@ -271,7 +271,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       # ============================================================
 
       describe "LLM-generated JSON and annotated output (robustness cases)" do
-        it "parses JSON inside markdown code fences (```json ... ```) if stripped manually" do
+        it "parses JSON inside markdown code fences (```json ... ```) directly" do
           input = "
 ```json
 {
@@ -280,13 +280,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 }
 ```
 "
-          # By default, parser doesn't strip fences, should raise
-          expect { SmarterJSON.process(input, acceleration: acceleration) }
-            .to raise_error(SmarterJSON::ParseError)
-
-          # User-side stripping (recommended in docs):
-          stripped = input[/```json\s*(.*?)\s*```/m, 1]
-          expect(SmarterJSON.process(stripped, acceleration: acceleration)).to eq({"foo" => 1, "bar" => "baz"})
+          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq({"foo" => 1, "bar" => "baz"})
         end
 
         it "parses JSON with pervasive LLM-style comments and explanations" do

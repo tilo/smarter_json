@@ -3,6 +3,16 @@
 
 > 🚧 Getting ready for the 1.0.0 release - sorry for the interface changes - thank you for your patience! 🚧
 
+## 0.8.0 (2026-06-03)
+- **Robustness** against LLM-generated / wrapped JSON:
+  - strips markdown code fences (```json / ```)
+  - ignores obvious prefix / suffix prose around a payload
+  - unwraps `<json>...</json>` and `BEGIN_JSON ... END_JSON`
+  - preserves multiple recovered payloads as an `Array`
+  - supports pretty-printed multi-line document framing on IO / block input
+  - **Warnings** now cover wrapper recovery too (`:code_fence_stripped`, `:prefix_text_ignored`, `:suffix_text_ignored`, `:wrapper_tag_stripped`)
+  - **No truncation recovery**: truncated / unterminated input still raises `SmarterJSON::ParseError`
+
 ## 0.7.0 (2026-06-03)
 - **Breaking:** replaced the `warnings:` option (and its `[result, warnings]` tuple return) with an `on_warning:` callable. Pass `on_warning: ->(w) { ... }` to be handed each `SmarterJSON::Warning` as the parser applies a lenient fix; `process` / `process_file` now always return the bare value (nil / value / Array) on every path. Unlike the tuple, this also fires on the streaming block form. The default (no handler) records nothing and costs nothing.
 
