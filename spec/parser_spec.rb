@@ -270,6 +270,69 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       # Layer 3 — HJSON-inspired additions
       # ============================================================
 
+      describe "LLM-generated JSON and annotated output (robustness cases)" do
+        it "parses JSON inside markdown code fences (```json ... ```) if stripped manually" do
+          input = "
+```json
+{
+  \"foo\": 1,
+  \"bar\": \"baz\"
+}
+```
+"
+          # By default, parser doesn't strip fences, should raise
+          expect { SmarterJSON.process(input, acceleration: acceleration) }
+            .to raise_error(SmarterJSON::ParseError)
+
+          # User-side stripping (recommended in docs):
+          stripped = input[/```json\s*(.*?)\s*```/m, 1]
+          expect(SmarterJSON.process(stripped, acceleration: acceleration)).to eq({"foo" => 1, "bar" => "baz"})
+        end
+
+        it "parses JSON with pervasive LLM-style comments and explanations" do
+          input = <<~JSON
+            {
+              "foo": 123, // main value
+              "bar": "baz"  # secondary label
+              # This is an explanation line
+              "baz": true /* always true */
+            }
+          JSON
+          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq({"foo"=>123, "bar"=>"baz", "baz"=>true})
+        end
+
+        it "accepts JSON objects/arrays abruptly truncated (returns prefix or raises cleanly)" do
+          # Partial object (closed)
+          expect(SmarterJSON.process('{"a":1, "b":2}', acceleration: acceleration)).to eq({"a"=>1, "b"=>2})
+          # Partial object (truncated after key)
+          expect { SmarterJSON.process('{"a":1, ', acceleration: acceleration) }
+            .to raise_error(SmarterJSON::ParseError, /end of input|unterminated/i)
+          # Partial array (closed)
+          expect(SmarterJSON.process('[1, 2, 3]', acceleration: acceleration)).to eq([1, 2, 3])
+          # Truncated array (no closing ]): warns or raises
+          expect { SmarterJSON.process('[1, 2, ', acceleration: acceleration) }
+            .to raise_error(SmarterJSON::ParseError, /end of input|unterminated/i)
+        end
+
+        it "tolerates duplicate keys, comments after values, python/JS literals in LLM output" do
+          input = <<~JSON
+            {
+              foo: undefined, // should be null
+              bar: True, # becomes true
+              baz: False /* becomes false */
+              val: None # becomes nil/null
+              extra: NaN // becomes Float::NAN
+              note: Infinity /* Float::INFINITY */
+              trace: "Done" // ok
+            }
+          JSON
+          result = SmarterJSON.process(input, acceleration: acceleration)
+          expect(result).to include("foo"=>nil, "bar"=>true, "baz"=>false, "val"=>nil)
+          expect(result["extra"]).to be_a(Float).and satisfy(&:nan?)
+          expect(result["note"]).to eq(Float::INFINITY)
+        end
+      end
+
       describe "HJSON-inspired additions (Layer 3)" do
         describe "# line comments" do
           it "accepts # comment before a value" do
@@ -771,6 +834,21 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect(parse_values(input, acceleration: acceleration)).to eq([{ "event" => 1 }, { "event" => 2 }, { "event" => 3 }])
         end
 
+        it "yields each value with leading, trailing, and repeated LF blank lines between documents" do
+          input = "\n\n{\"event\": 1}\n\n{\"event\": 2}\n\n"
+          expect(parse_values(input, acceleration: acceleration)).to eq([{ "event" => 1 }, { "event" => 2 }])
+        end
+
+        it "yields each value with leading, trailing, and repeated CRLF blank lines between documents" do
+          input = "\r\n\r\n{\"event\": 1}\r\n\r\n{\"event\": 2}\r\n\r\n"
+          expect(parse_values(input, acceleration: acceleration)).to eq([{ "event" => 1 }, { "event" => 2 }])
+        end
+
+        it "yields each value with leading, trailing, and repeated CR-only blank lines between documents" do
+          input = "\r\r{\"event\": 1}\r\r{\"event\": 2}\r\r"
+          expect(parse_values(input, acceleration: acceleration)).to eq([{ "event" => 1 }, { "event" => 2 }])
+        end
+
         it "yields each of concatenated objects with no separator" do
           expect(parse_values('{"a":1}{"b":2}', acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
         end
@@ -813,9 +891,39 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect(rv).to be_nil
         end
 
+        it "process(IO) with a block ignores leading, trailing, and repeated LF blank lines" do
+          io = StringIO.new("\n\n{\"id\":1}\n\n{\"id\":2}\n\n")
+          out = []
+          rv = SmarterJSON.process(io, acceleration: acceleration) { |v| out << v }
+          expect(out).to eq([{ "id" => 1 }, { "id" => 2 }])
+          expect(rv).to be_nil
+        end
+
+        it "process(IO) with a block ignores leading, trailing, and repeated CRLF blank lines" do
+          io = StringIO.new("\r\n\r\n{\"id\":1}\r\n\r\n{\"id\":2}\r\n\r\n")
+          out = []
+          rv = SmarterJSON.process(io, acceleration: acceleration) { |v| out << v }
+          expect(out).to eq([{ "id" => 1 }, { "id" => 2 }])
+          expect(rv).to be_nil
+        end
+
+        it "process(IO) with a block handles CR-only blank lines and CR-only document separators" do
+          io = StringIO.new("\r\r{\"id\":1}\r\r{\"id\":2}\r\r")
+          out = []
+          rv = SmarterJSON.process(io, acceleration: acceleration) { |v| out << v }
+          expect(out).to eq([{ "id" => 1 }, { "id" => 2 }])
+          expect(rv).to be_nil
+        end
+
         it "process(IO) without a block returns the value or Array" do
           expect(SmarterJSON.process(StringIO.new('{"a":1}'), acceleration: acceleration)).to eq({ "a" => 1 })
           expect(SmarterJSON.process(StringIO.new(%({"a":1}\n{"b":2})), acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
+        end
+
+        it "process(IO) without a block ignores LF / CRLF / CR-only blank lines around documents" do
+          expect(SmarterJSON.process(StringIO.new("\n\n{\"a\":1}\n\n{\"b\":2}\n\n"), acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
+          expect(SmarterJSON.process(StringIO.new("\r\n\r\n{\"a\":1}\r\n\r\n{\"b\":2}\r\n\r\n"), acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
+          expect(SmarterJSON.process(StringIO.new("\r\r{\"a\":1}\r\r{\"b\":2}\r\r"), acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
         end
 
         it "process raises ArgumentError for neither a String nor an IO" do
@@ -854,6 +962,21 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         it "returns an Array of documents for newline-delimited JSON (NDJSON / JSONL)" do
           input = %({"event": 1}\n{"event": 2}\n{"event": 3}\n)
           expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{ "event" => 1 }, { "event" => 2 }, { "event" => 3 }])
+        end
+
+        it "returns an Array of documents with leading, trailing, and repeated LF blank lines" do
+          input = "\n\n{\"event\": 1}\n\n{\"event\": 2}\n\n"
+          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{ "event" => 1 }, { "event" => 2 }])
+        end
+
+        it "returns an Array of documents with leading, trailing, and repeated CRLF blank lines" do
+          input = "\r\n\r\n{\"event\": 1}\r\n\r\n{\"event\": 2}\r\n\r\n"
+          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{ "event" => 1 }, { "event" => 2 }])
+        end
+
+        it "returns an Array of documents with leading, trailing, and repeated CR-only blank lines" do
+          input = "\r\r{\"event\": 1}\r\r{\"event\": 2}\r\r"
+          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{ "event" => 1 }, { "event" => 2 }])
         end
 
         it "returns an Array for concatenated objects with no separator" do
