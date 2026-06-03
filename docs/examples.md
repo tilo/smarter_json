@@ -118,7 +118,7 @@ A `#`/`//` only starts a comment when preceded by whitespace, so `http://example
 
 #### Fenced payload
 
-```ruby
+````ruby
 SmarterJSON.process(<<~TEXT)
   Here is the JSON:
 
@@ -129,7 +129,7 @@ SmarterJSON.process(<<~TEXT)
   ```
 TEXT
 # => {"a"=>1}
-```
+````
 
 #### Prose before / after the payload
 

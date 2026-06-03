@@ -24,7 +24,7 @@ SmarterJSON.process("host: localhost\nport: 5432")     # => {"host"=>"localhost"
 
 `process` is polymorphic: its first argument is **either a String of JSON content or an IO to read from**. A String is always treated as content, never as a filename — use `process_file` for paths. When the input wraps the payload in obvious markdown / prose / tags, `process` strips that wrapper first and then parses the recovered payload(s).
 
-```ruby
+````ruby
 SmarterJSON.process(<<~TEXT)
   Here is the JSON:
 
@@ -55,7 +55,7 @@ SmarterJSON.process(<<~TEXT)
   {"b":2}
 TEXT
 # => [{"a"=>1}, {"b"=>2}]
-```
+````
 
 ```ruby
 SmarterJSON.process(io)         # an open IO (File, StringIO, socket, …) — reads it and parses
