@@ -3,7 +3,7 @@
 
 > 🚧 Getting ready for the 1.0.0 release - sorry for the interface changes - thank you for your patience! 🚧
 
-## 0.7.0 (2026-06-02)
+## 0.7.0 (2026-06-03)
 - **Breaking:** replaced the `warnings:` option (and its `[result, warnings]` tuple return) with an `on_warning:` callable. Pass `on_warning: ->(w) { ... }` to be handed each `SmarterJSON::Warning` as the parser applies a lenient fix; `process` / `process_file` now always return the bare value (nil / value / Array) on every path. Unlike the tuple, this also fires on the streaming block form. The default (no handler) records nothing and costs nothing.
 
 ## 0.6.0 (2026-06-02)
