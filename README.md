@@ -62,57 +62,16 @@ Concurrent calls are safe. The parser/generator keep per-call state local, and t
 
 ## Usage
 
-````ruby
+Pass a String of JSON content or an IO; you get back the parsed value. The same call handles strict JSON, JSON5, and HJSON-style config — there are no modes or flags.
+
+```ruby
 require "smarter_json"
 
-SmarterJSON.process('{"a": 1, "b": [2, 3]}')          # => {"a"=>1, "b"=>[2, 3]}
-SmarterJSON.process("host: localhost\nport: 5432")     # => {"host"=>"localhost", "port"=>5432}  (no braces needed)
-SmarterJSON.process_file("config.json5")               # read a file, then parse
+SmarterJSON.process('{"a": 1, "b": [2, 3]}')   # => {"a"=>1, "b"=>[2, 3]}
+SmarterJSON.process_file("config.json5")        # read a file, then parse
+```
 
-# Multiple documents (NDJSON / JSONL / concatenated) — no block, no special method:
-SmarterJSON.process(%({"id":1}\n{"id":2}\n{"id":3}))   # => [{"id"=>1}, {"id"=>2}, {"id"=>3}]
-SmarterJSON.process('{"id":1}')                         # => {"id"=>1}   (one document → the value itself)
-SmarterJSON.process("")                                 # => nil          (zero documents)
-
-# For input larger than memory, stream one document at a time with a block
-# (process and process_file both forward the block):
-SmarterJSON.process_file("events.ndjson") { |event| EventJob.perform_async(event) }
-
-# Wrapper noise is stripped automatically:
-SmarterJSON.process(<<~TEXT)
-  Here is the JSON:
-
-  ```json
-  {
-    "a": 1
-  }
-  ```
-TEXT
-# => {"a"=>1}
-
-SmarterJSON.process(<<~TEXT)
-  Here is the result:
-
-  {
-    "a": 1
-  }
-
-  Hope this helps.
-TEXT
-# => {"a"=>1}
-
-SmarterJSON.process("<json>{\"a\":1}</json>")
-# => {"a"=>1}
-
-SmarterJSON.process(<<~TEXT)
-  first attempt:
-  {"a":1}
-
-  corrected payload:
-  {"b":2}
-TEXT
-# => [{"a"=>1}, {"b"=>2}]
-````
+See [Examples](#examples) below for multi-document input, streaming, and recovering JSON from LLM / markdown noise.
 
 ### Options
 
@@ -136,6 +95,85 @@ data  = SmarterJSON.process(input, on_warning: ->(w) { warns << w })
 
 # Or route them — log, count, raise:
 SmarterJSON.process(input, on_warning: ->(w) { Rails.logger.warn(w) })
+```
+
+## Examples
+
+### Lenient, config-style input
+
+No outer braces needed — a file or string that starts with `key: value` is read as an implicit root object (HJSON-style):
+
+```ruby
+SmarterJSON.process("host: localhost\nport: 5432")
+# => {"host"=>"localhost", "port"=>5432}
+```
+
+### Multiple documents (NDJSON / JSONL / concatenated)
+
+`process` detects how many top-level documents the input holds — **no block and no special method**. Zero documents returns `nil`, one returns the value itself, two or more return an `Array`:
+
+```ruby
+SmarterJSON.process(%({"id":1}\n{"id":2}\n{"id":3}))   # => [{"id"=>1}, {"id"=>2}, {"id"=>3}]
+SmarterJSON.process('{"id":1}')                         # => {"id"=>1}   (one document)
+SmarterJSON.process("")                                 # => nil          (zero documents)
+```
+
+### Streaming large input with a block
+
+For input larger than memory, pass a block: each document is yielded as it is parsed and the method returns `nil` instead of building an `Array`. Both `process` and `process_file` forward the block:
+
+```ruby
+SmarterJSON.process_file("events.ndjson") { |event| EventJob.perform_async(event) }
+```
+
+### Recovering JSON from LLM / markdown noise
+
+When the payload is wrapped in markdown fences, surrounding prose, or tags, `process` strips the wrapper and parses what's inside. (Clean JSON never pays for this — recovery only runs when a plain parse fails.)
+
+A fenced code block, as an LLM often returns:
+
+````ruby
+SmarterJSON.process(<<~TEXT)
+  Here is the JSON:
+
+  ```json
+  { "a": 1 }
+  ```
+TEXT
+# => {"a"=>1}
+````
+
+Explanatory prose before and/or after the payload is ignored:
+
+```ruby
+SmarterJSON.process(<<~TEXT)
+  Here is the result:
+
+  { "a": 1 }
+
+  Hope this helps.
+TEXT
+# => {"a"=>1}
+```
+
+`<json>...</json>` / `BEGIN_JSON ... END_JSON` wrapper tags are unwrapped:
+
+```ruby
+SmarterJSON.process('<json>{"a":1}</json>')
+# => {"a"=>1}
+```
+
+When one blob contains several recovered payloads, they come back as an `Array` (the same rule as multi-document input):
+
+```ruby
+SmarterJSON.process(<<~TEXT)
+  first attempt:
+  {"a":1}
+
+  corrected payload:
+  {"b":2}
+TEXT
+# => [{"a"=>1}, {"b"=>2}]
 ```
 
 ## Performance
