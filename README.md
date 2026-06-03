@@ -112,7 +112,7 @@ SmarterJSON.process(<<~TEXT)
   {"b":2}
 TEXT
 # => [{"a"=>1}, {"b"=>2}]
-```
+````
 
 ### Options
 
