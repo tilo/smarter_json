@@ -46,6 +46,19 @@ gem install smarter_json
 
 The C extension is built on install and used automatically. On platforms where it can't build, the pure-Ruby parser runs instead and produces identical results.
 
+## Usage
+
+Pass a String of JSON content or an IO; you get back the parsed value. The same call handles strict JSON, JSON5, and HJSON-style config — there are no modes or flags.
+
+```ruby
+require "smarter_json"
+
+SmarterJSON.process('{"a": 1, "b": [2, 3]}')   # => {"a"=>1, "b"=>[2, 3]}
+SmarterJSON.process_file("config.json5")        # read a file, then parse
+```
+
+See [Examples](#examples) below for multi-document input, streaming, and recovering JSON from LLM / markdown noise.
+
 ## API stability and thread safety
 
 The public API is now considered stable: `SmarterJSON.process`, `SmarterJSON.process_file`, `SmarterJSON.generate`, and the documented options in this README/docs are the supported surface.
@@ -60,30 +73,6 @@ Concurrent calls are safe. The parser/generator keep per-call state local, and t
   * [Configuration Options](docs/options.md)
   * [Examples](docs/examples.md)
 
-## Usage
-
-Pass a String of JSON content or an IO; you get back the parsed value. The same call handles strict JSON, JSON5, and HJSON-style config — there are no modes or flags.
-
-```ruby
-require "smarter_json"
-
-SmarterJSON.process('{"a": 1, "b": [2, 3]}')   # => {"a"=>1, "b"=>[2, 3]}
-SmarterJSON.process_file("config.json5")        # read a file, then parse
-```
-
-See [Examples](#examples) below for multi-document input, streaming, and recovering JSON from LLM / markdown noise.
-
-### Options
-
-| option            | default      | meaning                                                                 |
-|-------------------|--------------|-------------------------------------------------------------------------|
-| `symbolize_keys`  | `false`      | return object keys as Symbols instead of Strings                        |
-| `duplicate_key`   | `:last_wins` | `:last_wins` / `:first_wins` / `:raise` for repeated keys in one object |
-| `bigdecimal_load` | `:auto`      | `:auto` keeps high-precision decimals as `BigDecimal`; `:float` forces `Float`; `:bigdecimal` forces `BigDecimal` |
-| `acceleration`    | `true`       | `true` uses the C extension when compiled and loadable; `false` forces pure Ruby (identical results) |
-| `encoding`        | `"UTF-8"`    | labels the input's encoding (no transcoding pass; see below)            |
-| `on_warning`      | `nil`        | a callable invoked once per lenient fix applied (`:empty_slot`, `:empty_value`, `:duplicate_key`), passed a `SmarterJSON::Warning`; the return value is never changed. See below. |
-
 ### Warnings (`on_warning`)
 
 When the parser quietly fixes something lenient — collapses an empty comma slot, reads a key with no value as `null`, drops a duplicate key, strips code fences, ignores wrapper prose, unwraps wrapper tags — it can tell you, without changing what `process` returns. Pass a callable as `on_warning:`; it is invoked once per fix with a `SmarterJSON::Warning` (`type`, `message`, `line`, `col`). It fires on every path, including the streaming block form. With no handler (the default) nothing is recorded and there is zero overhead.
@@ -96,6 +85,32 @@ data  = SmarterJSON.process(input, on_warning: ->(w) { warns << w })
 # Or route them — log, count, raise:
 SmarterJSON.process(input, on_warning: ->(w) { Rails.logger.warn(w) })
 ```
+
+
+## Performance
+
+Benchmarks: p10 of 40 runs, Apple M1 Max, Ruby 3.4.7, on the standard JSON corpus (canada, citm_catalog, twitter, github_events, …). The apples-to-apples comparisons are **SmarterJSON/C** vs **Oj/strict** vs **stdlib `json`**, all producing `Float` (run `rake report` in `json_benchmarks/` for the full table — numbers vary run to run).
+
+- **vs Oj/strict** (the `JSON.parse`-equivalent mode, both producing `Float`): SmarterJSON/C is faster on nearly every file — typically **1.1–1.6×** (e.g. big_decimals ~1.6×, deeply-nested ~1.4×, citm / twitter / usgs ~1.3×, github / citylots / weather ~1.1–1.2×). The one exception is **string_array**, where Oj/strict's SIMD string scan is ~1.7× faster — that's the current frontier.
+- **vs stdlib `json` (C):** competitive with the fastest Ruby JSON parser — it ties `json` on big_decimals and string_array, and trails by ~1.1–1.7× on the rest. (`canada.json` is the outlier, far behind — that's the `BigDecimal` default, see below.)
+- **Numbers:** floats are parsed with Ryū (correctly rounded, single-pass), so number-heavy data is fast and bit-exact.
+
+**Two notes on fair comparison:**
+
+- **NDJSON:** on multi-document files, **only SmarterJSON parses the input via plain `process`** — Oj and `json` raise without a block, so their cells are `N/A`. That `N/A` reflects real default behavior, not a measurement gap. Plain `process` collects every document into an Array at ~270 MB/s; the streaming block form runs faster (~440 MB/s) because it doesn't hold all documents in memory at once.
+- **High-precision decimals (e.g. `canada.json`):** SmarterJSON's default `:auto` mode preserves high-precision numbers as `BigDecimal` (matching Oj's default), which is intrinsically slower than `Float`. Against `Float`-producing parsers it looks slower on such files; pass `bigdecimal_load: :float` to compare like-for-like (it then runs much faster). Against the equivalent `BigDecimal`-producing Oj mode, SmarterJSON is faster.
+
+
+### Options
+
+| option            | default      | meaning                                                                 |
+|-------------------|--------------|-------------------------------------------------------------------------|
+| `symbolize_keys`  | `false`      | return object keys as Symbols instead of Strings                        |
+| `duplicate_key`   | `:last_wins` | `:last_wins` / `:first_wins` / `:raise` for repeated keys in one object |
+| `bigdecimal_load` | `:auto`      | `:auto` keeps high-precision decimals as `BigDecimal`; `:float` forces `Float`; `:bigdecimal` forces `BigDecimal` |
+| `acceleration`    | `true`       | `true` uses the C extension when compiled and loadable; `false` forces pure Ruby (identical results) |
+| `encoding`        | `"UTF-8"`    | labels the input's encoding (no transcoding pass; see below)            |
+| `on_warning`      | `nil`        | a callable invoked once per lenient fix applied (`:empty_slot`, `:empty_value`, `:duplicate_key`), passed a `SmarterJSON::Warning`; the return value is never changed. See below. |
 
 ## Examples
 
@@ -175,19 +190,6 @@ SmarterJSON.process(<<~TEXT)
 TEXT
 # => [{"a"=>1}, {"b"=>2}]
 ```
-
-## Performance
-
-Benchmarks: p10 of 40 runs, Apple M1 Max, Ruby 3.4.7, on the standard JSON corpus (canada, citm_catalog, twitter, github_events, …). The apples-to-apples comparisons are **SmarterJSON/C** vs **Oj/strict** vs **stdlib `json`**, all producing `Float` (run `rake report` in `json_benchmarks/` for the full table — numbers vary run to run).
-
-- **vs Oj/strict** (the `JSON.parse`-equivalent mode, both producing `Float`): SmarterJSON/C is faster on nearly every file — typically **1.1–1.6×** (e.g. big_decimals ~1.6×, deeply-nested ~1.4×, citm / twitter / usgs ~1.3×, github / citylots / weather ~1.1–1.2×). The one exception is **string_array**, where Oj/strict's SIMD string scan is ~1.7× faster — that's the current frontier.
-- **vs stdlib `json` (C):** competitive with the fastest Ruby JSON parser — it ties `json` on big_decimals and string_array, and trails by ~1.1–1.7× on the rest. (`canada.json` is the outlier, far behind — that's the `BigDecimal` default, see below.)
-- **Numbers:** floats are parsed with Ryū (correctly rounded, single-pass), so number-heavy data is fast and bit-exact.
-
-**Two notes on fair comparison:**
-
-- **NDJSON:** on multi-document files, **only SmarterJSON parses the input via plain `process`** — Oj and `json` raise without a block, so their cells are `N/A`. That `N/A` reflects real default behavior, not a measurement gap. Plain `process` collects every document into an Array at ~270 MB/s; the streaming block form runs faster (~440 MB/s) because it doesn't hold all documents in memory at once.
-- **High-precision decimals (e.g. `canada.json`):** SmarterJSON's default `:auto` mode preserves high-precision numbers as `BigDecimal` (matching Oj's default), which is intrinsically slower than `Float`. Against `Float`-producing parsers it looks slower on such files; pass `bigdecimal_load: :float` to compare like-for-like (it then runs much faster). Against the equivalent `BigDecimal`-producing Oj mode, SmarterJSON is faster.
 
 ## Encoding
 
