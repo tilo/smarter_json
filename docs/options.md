@@ -18,7 +18,7 @@ These options are passed to [`SmarterJSON.process`](./basic_read_api.md) and `Sm
 | Option            | Default      | Explanation                                                                                                            |
 |-------------------|--------------|------------------------------------------------------------------------------------------------------------------------|
 | `:symbolize_keys` | `false`      | Return object keys as Symbols instead of Strings.                                                                      |
-| `:duplicate_key`  | `:last_wins` | How to handle a key that repeats within one object: `:last_wins`, `:first_wins`, or `:raise`.                          |
+| `:duplicate_key`  | `:last_wins` | How to handle a key that repeats within one object: `:last_wins` or `:first_wins`. (Every repeat is also reported through `:on_warning` — see below.)                          |
 | `:bigdecimal_load`| `:auto`      | `:auto` keeps high-precision decimals as `BigDecimal` (matches Oj); `:float` forces every number to `Float`; `:bigdecimal` forces every decimal to `BigDecimal`. |
 | `:acceleration`   | `true`       | Use the C extension when it is compiled and loadable; `false` forces the pure-Ruby implementation. Both produce identical results. |
 | `:encoding`       | `nil`        | Labels the input's encoding (e.g. `"UTF-8"`). It does **not** trigger a transcoding pass — see below.                  |
@@ -26,7 +26,7 @@ These options are passed to [`SmarterJSON.process`](./basic_read_api.md) and `Sm
 
 ```ruby
 SmarterJSON.process('{"a": 1}', symbolize_keys: true)               # => {:a=>1}
-SmarterJSON.process('{"a":1,"a":2}', duplicate_key: :raise)         # raises SmarterJSON::ParseError
+SmarterJSON.process('{"a":1,"a":2}', duplicate_key: :first_wins)    # => {"a"=>1}  (default keeps the 2)
 SmarterJSON.process(big_decimal_json, bigdecimal_load: :float)      # every number as Float (fastest)
 SmarterJSON.process("[1,,2]", on_warning: ->(w) { puts w })         # => [1, 2], and prints the warning
 ```

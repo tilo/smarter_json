@@ -1398,12 +1398,6 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           it "first value wins with duplicate_key: :first_wins" do
             expect(SmarterJSON.process('{"a": 1, "a": 2}', duplicate_key: :first_wins, acceleration: acceleration)["a"]).to eq(1)
           end
-
-          it "raises with duplicate_key: :raise" do
-            expect do
-              SmarterJSON.process('{"a": 1, "a": 2}', duplicate_key: :raise, acceleration: acceleration)
-            end.to raise_error(SmarterJSON::ParseError, /duplicate/i)
-          end
         end
 
         describe "bigdecimal_load (Oj-compatible; default :auto)" do

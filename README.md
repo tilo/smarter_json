@@ -125,7 +125,7 @@ Benchmarks: p10 of 40 runs, Apple M1 Max, Ruby 3.4.7, on the standard JSON corpu
 | option            | default      | meaning                                                                 |
 |-------------------|--------------|-------------------------------------------------------------------------|
 | `symbolize_keys`  | `false`      | return object keys as Symbols instead of Strings                        |
-| `duplicate_key`   | `:last_wins` | `:last_wins` / `:first_wins` / `:raise` for repeated keys in one object |
+| `duplicate_key`   | `:last_wins` | `:last_wins` / `:first_wins` for a key repeated in one object (every repeat is also reported via `on_warning`) |
 | `bigdecimal_load` | `:auto`      | `:auto` keeps high-precision decimals as `BigDecimal`; `:float` forces `Float`; `:bigdecimal` forces `BigDecimal` |
 | `acceleration`    | `true`       | `true` uses the C extension when compiled and loadable; `false` forces pure Ruby (identical results) |
 | `encoding`        | `"UTF-8"`    | labels the input's encoding (no transcoding pass; see below)            |

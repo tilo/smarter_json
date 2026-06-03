@@ -48,7 +48,6 @@ static ID    fj_name_id;
 static VALUE fj_sym_encoding;
 static VALUE fj_sym_symbolize_keys;
 static VALUE fj_sym_first_wins;
-static VALUE fj_sym_raise;
 static VALUE fj_sym_bigdecimal_load;
 static VALUE fj_sym_float;
 static VALUE fj_sym_bigdecimal;
@@ -70,7 +69,6 @@ typedef struct {
   int depth;
   int symbolize_keys;
   int dup_first_wins;
-  int dup_raise;
   int bigdecimal_load;  /* 0 = float, 1 = auto, 2 = bigdecimal */
   fj_kc_slot *kcache;   /* per-parse key cache (NULL when interning unavailable) */
   VALUE on_warning;     /* on_warning: callable invoked per non-fatal lenient fix, else Qnil */
@@ -1164,19 +1162,9 @@ static void fj_hash_bulk_insert(long count, const VALUE *pairs, VALUE hash) {
 void rb_hash_bulk_insert(long, const VALUE *, VALUE);
 #endif
 
-/* Hash entry count as a C long. RHASH_SIZE is not part of the public C API on
- * older Ruby (< ~2.7), but rb_hash_size (Hash#size's implementation) is available
- * everywhere. Only used on the rare :raise duplicate-key path, so the boxing cost
- * is irrelevant — and it keeps the extension buildable down to Ruby 2.5. */
-static inline long fj_hash_len(VALUE hash) {
-  return NUM2LONG(rb_hash_size(hash));
-}
-
 /* Build a Hash from `count` interleaved key,value slots. Fast path (String keys,
- * default :last_wins or :raise): pre-size + bulk insert, detecting duplicates by
- * comparing the resulting size to the pair count — free unless a collision
- * actually happened. symbolize_keys / :first_wins use a per-member loop into the
- * same pre-sized hash. */
+ * default :last_wins): pre-size + bulk insert. symbolize_keys / :first_wins use a
+ * per-member loop into the same pre-sized hash. */
 static VALUE fj_build_object(fj_state *st, const VALUE *pairs, long count) {
   long  entries = count / 2, i;
   VALUE hash    = rb_hash_new_capa(entries);
@@ -1185,22 +1173,13 @@ static VALUE fj_build_object(fj_state *st, const VALUE *pairs, long count) {
    * the per-member loop below to report each dropped duplicate key. */
   if (!st->symbolize_keys && !st->dup_first_wins && st->on_warning == Qnil) {
     rb_hash_bulk_insert(count, pairs, hash);
-    if (st->dup_raise && fj_hash_len(hash) < entries) {
-      VALUE seen = rb_hash_new_capa(entries);
-      for (i = 0; i + 1 < count; i += 2) {
-        long before = fj_hash_len(seen);
-        rb_hash_aset(seen, pairs[i], Qtrue);
-        if (fj_hash_len(seen) == before) fj_error(st, "duplicate key");
-      }
-    }
     return hash;
   }
 
   for (i = 0; i + 1 < count; i += 2) {
     VALUE k = st->symbolize_keys ? rb_funcall(pairs[i], fj_to_sym_id, 0) : pairs[i];
-    if (st->dup_first_wins || st->dup_raise || st->on_warning != Qnil) {
+    if (st->dup_first_wins || st->on_warning != Qnil) {
       if (RTEST(rb_funcall(hash, fj_key_p_id, 1, k))) {
-        if (st->dup_raise) fj_error(st, "duplicate key");
         fj_warn(st, fj_sym_duplicate_key, "duplicate key");
         if (st->dup_first_wins) continue;
       }
@@ -1423,7 +1402,6 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
   st.symbolize_keys = RTEST(rb_hash_aref(opts, fj_sym_symbolize_keys));
   dk = rb_hash_aref(opts, fj_sym_duplicate_key);
   st.dup_first_wins = (dk == fj_sym_first_wins);
-  st.dup_raise = (dk == fj_sym_raise);
 
   {
     VALUE bd = rb_hash_aref(opts, fj_sym_bigdecimal_load);
@@ -1493,7 +1471,6 @@ void Init_smarter_json(void) {
   fj_sym_encoding = ID2SYM(rb_intern("encoding"));
   fj_sym_symbolize_keys = ID2SYM(rb_intern("symbolize_keys"));
   fj_sym_first_wins = ID2SYM(rb_intern("first_wins"));
-  fj_sym_raise = ID2SYM(rb_intern("raise"));
   fj_sym_bigdecimal_load = ID2SYM(rb_intern("bigdecimal_load"));
   fj_sym_float = ID2SYM(rb_intern("float"));
   fj_sym_bigdecimal = ID2SYM(rb_intern("bigdecimal"));

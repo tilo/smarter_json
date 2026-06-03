@@ -621,7 +621,7 @@ module SmarterJSON
       acceleration: true, # use the C extension when available
       encoding: nil, # label the input's encoding (no transcoding)
       symbolize_keys: false, # Symbol keys instead of String
-      duplicate_key: :last_wins, # :last_wins | :first_wins | :raise
+      duplicate_key: :last_wins, # :last_wins | :first_wins
       bigdecimal_load: :auto, # :auto | :float | :bigdecimal (Oj-compatible)
       on_warning: nil, # a callable invoked once per non-fatal lenient fix (a SmarterJSON::Warning)
     }.freeze
@@ -1045,8 +1045,6 @@ module SmarterJSON
     def store_member(hash, key, value)
       k = @symbolize_keys ? key.to_sym : key
       if hash.key?(k)
-        raise error("duplicate key #{k.inspect}") if @duplicate_key == :raise
-
         warn(:duplicate_key, "duplicate key #{k.inspect} — #{@duplicate_key}") if @on_warning
         return if @duplicate_key == :first_wins
       end

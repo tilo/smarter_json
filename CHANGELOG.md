@@ -3,6 +3,9 @@
 
 > 🚧 Getting ready for the 1.0.0 release - sorry for the interface changes - thank you for your patience! 🚧
 
+## 0.9.3 (2026-06-03)
+- **Removed the `duplicate_key: :raise` option.** Raising on a repeated key is strict-validation policing, which runs against SmarterJSON's "extract the data, don't police the spec" philosophy — for strict behavior, use the stdlib `json` gem. `duplicate_key:` now accepts only `:last_wins` (default) and `:first_wins`. Every repeated key is still reported through `on_warning` (`:duplicate_key`), so callers that need to detect duplicates (e.g. for the duplicate-key security concern) can observe and decide for themselves without rejecting the whole document.
+
 ## 0.9.2 (2026-06-03)
 - **Fix a residual performance regression affecting every large document.** The "leading label" check (for `JSON: {…}`, which parses successfully but wrongly as an implicit-root object) now uses `String#start_with?(/…/)` instead of `match?(/\A…/)`. A `\A`-anchored `match?` is **not** anchor-optimized — it retries at every byte position and so scanned the entire input (~0.3 s on a 200 MB document) on every parse, which had quietly taxed every large file since the wrapper was introduced (deeply_nested.json and big_decimals.json sat well below their 0.6.0 throughput even after 0.9.1). `start_with?` inspects only the beginning, restoring — and slightly exceeding — 0.6.0 throughput across the board.
 

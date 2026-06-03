@@ -81,12 +81,11 @@ SmarterJSON.process('{"a": 1, "b": 2}', symbolize_keys: true)   # => {:a=>1, :b=
 
 ### Example 7: Duplicate Keys
 
-By default the last value wins. Choose `:first_wins` or `:raise` instead:
+By default the last value wins. Pass `:first_wins` to keep the first instead (either way, the repeat is reported through [`on_warning`](./options.md)):
 
 ```ruby
 SmarterJSON.process('{"a":1,"a":2}')                          # => {"a"=>2}   (:last_wins, the default)
 SmarterJSON.process('{"a":1,"a":2}', duplicate_key: :first_wins)  # => {"a"=>1}
-SmarterJSON.process('{"a":1,"a":2}', duplicate_key: :raise)   # raises SmarterJSON::ParseError
 ```
 
 ### Example 8: High-Precision Numbers: BigDecimal vs Float

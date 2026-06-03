@@ -77,11 +77,11 @@ RSpec.describe "SmarterJSON.process on_warning:" do
           expect(warns.map(&:type)).to eq([:duplicate_key])
         end
 
-        it "does not warn under duplicate_key: :raise (it raises instead)" do
-          _, handler = collect
-          expect do
-            SmarterJSON.process('{"a":1,"a":2}', on_warning: handler, duplicate_key: :raise, acceleration: acceleration)
-          end.to raise_error(SmarterJSON::ParseError)
+        it "fires :duplicate_key under duplicate_key: :first_wins too (first value kept)" do
+          warns, handler = collect
+          result = SmarterJSON.process('{"a":1,"a":2}', on_warning: handler, duplicate_key: :first_wins, acceleration: acceleration)
+          expect(result).to eq({ "a" => 1 })
+          expect(warns.map(&:type)).to eq([:duplicate_key])
         end
 
         it "fires per empty slot for leading + interior, but NOT for a trailing comma" do
