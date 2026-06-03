@@ -62,7 +62,7 @@ Concurrent calls are safe. The parser/generator keep per-call state local, and t
 
 ## Usage
 
-```ruby
+````ruby
 require "smarter_json"
 
 SmarterJSON.process('{"a": 1, "b": [2, 3]}')          # => {"a"=>1, "b"=>[2, 3]}
