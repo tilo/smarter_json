@@ -2,7 +2,7 @@
 
 ![Gem Version](https://img.shields.io/gem/v/smarter_json) [![codecov](https://codecov.io/gh/tilo/smarter_json/branch/main/graph/badge.svg)](https://codecov.io/gh/tilo/smarter_json) <!-- [![Downloads](https://img.shields.io/gem/dt/smarter_json)](https://rubygems.org/gems/smarter_json) --> [![RubyGems](https://img.shields.io/badge/RubyGems-smarter__json-brightgreen?logo=rubygems&logoColor=white)](https://rubygems.org/gems/smarter_json) [![Ruby Toolbox](https://img.shields.io/badge/Ruby%20Toolbox-smarter__json-brightgreen)](https://www.ruby-toolbox.com/projects/smarter_json)
 
-A lenient, fast JSON processor for Ruby. It extracts strict JSON, JSON5, HJSON-style config, and the messy JSON-ish input humans actually write — and in benchmarks it matches or beats Oj on nearly every file. SmarterJSON is opinionated: we want your JSON processing to be successful. Traditional JSON parsers are strict - they stop at the first deviation - SmarterJSON keeps going - it optimizes for getting your data out, not for policing the JSON spec.
+A lenient, fast JSON processor for Ruby. It extracts strict JSON, NDJSON, JSON5, HJSON-style config, and the messy JSON-ish input humans actually write — and in benchmarks it matches or beats Oj on nearly every file. SmarterJSON is opinionated: we want your JSON processing to be successful. Traditional JSON parsers are strict - they stop at the first deviation - SmarterJSON keeps going - it optimizes for getting your data out, not for policing the JSON spec.
 
 > **SmarterJSON: one tool, no modes — want strict? Please use the stdlib `json` gem.**
 
