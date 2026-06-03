@@ -378,6 +378,76 @@ RSpec.describe "LLM-style input recovery" do
           expect(rv).to be_nil
         end
       end
+
+      describe "framing markers split across chunk boundaries" do
+        # The Framer reads the IO in fixed-size chunks and brackets documents with a
+        # byte FSM. A multi-byte token (//, /*, ''') whose first byte lands on the last
+        # byte of a chunk must still be recognized once the next chunk arrives — otherwise
+        # a brace *inside* a comment/string gets miscounted and the document frames wrong.
+        chunk = SmarterJSON::Framer::CHUNK_SIZE
+
+        def stream(input, acceleration:)
+          docs = []
+          SmarterJSON.process(StringIO.new(input), acceleration: acceleration) { |d| docs << d }
+          docs
+        end
+
+        it "recognizes a // comment (containing a brace) whose slashes straddle the boundary" do
+          head = '{"a":1,'
+          doc = head + (" " * (chunk - 1 - head.bytesize)) + "// } not real\n" + '"b":2}'
+          expect(doc.index("//")).to eq(chunk - 1) # the two slashes sit on either side of the boundary
+          expect(stream(doc + "\n", acceleration: acceleration)).to eq([{ "a" => 1, "b" => 2 }])
+        end
+
+        it "recognizes a /* */ comment (containing a brace) whose opening straddles the boundary" do
+          head = '{"a":1,'
+          doc = head + (" " * (chunk - 1 - head.bytesize)) + "/* } */" + '"b":2}'
+          expect(doc.index("/*")).to eq(chunk - 1)
+          expect(stream(doc + "\n", acceleration: acceleration)).to eq([{ "a" => 1, "b" => 2 }])
+        end
+
+        it "recognizes a /* */ comment (containing a brace) whose closing */ straddles the boundary" do
+          prefix = '{"a":1, /* } '
+          doc = prefix + (" " * (chunk - 1 - prefix.bytesize)) + "*/" + '"b":2}'
+          expect(doc.index("*/")).to eq(chunk - 1)
+          expect(stream(doc + "\n", acceleration: acceleration)).to eq([{ "a" => 1, "b" => 2 }])
+        end
+
+        it "recognizes a triple-quoted string (containing a brace) whose ''' straddles the boundary" do
+          head = '{"a":'
+          doc = head + (" " * (chunk - 2 - head.bytesize)) + "'''" + " } " + "'''" + ',"b":2}'
+          expect(stream(doc + "\n", acceleration: acceleration)).to eq([{ "a" => " } ", "b" => 2 }])
+        end
+
+        it "frames a brace inside a double-quoted string that straddles the boundary" do
+          head = '{"a":'
+          doc = head + (" " * (chunk - 1 - head.bytesize)) + '"x}y"' + ',"b":2}'
+          expect(stream(doc + "\n", acceleration: acceleration)).to eq([{ "a" => "x}y", "b" => 2 }])
+        end
+
+        it "streams a single document larger than one chunk" do
+          big = "{" + (1..3000).map { |i| %("k#{i}":#{i}) }.join(",") + "}"
+          expect(big.bytesize).to be > chunk
+          docs = stream(big + "\n" + big, acceleration: acceleration)
+          expect(docs.size).to eq(2)
+          expect(docs.first.size).to eq(3000)
+          expect(docs.first).to eq(docs.last)
+        end
+      end
+
+      describe "wrapper warnings reflect actual stripping, not markers inside the payload" do
+        it "does not emit code_fence_stripped when ``` appears only inside a string value of a complete payload" do
+          warns, handler = collect
+          expect(SmarterJSON.process('{"code":"```"}', acceleration: acceleration, on_warning: handler)).to eq({ "code" => "```" })
+          expect(warns).to be_empty
+        end
+
+        it "does not emit wrapper_tag_stripped when <json> appears only inside a string value of a complete payload" do
+          warns, handler = collect
+          expect(SmarterJSON.process('{"note":"see <json> here"}', acceleration: acceleration, on_warning: handler)).to eq({ "note" => "see <json> here" })
+          expect(warns).to be_empty
+        end
+      end
     end
   end
 end

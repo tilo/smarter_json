@@ -65,9 +65,9 @@ SmarterJSON.process('{"id":1}')                          # => {"id"=>1}
 SmarterJSON.process("")                                  # => nil
 ```
 
-### Example 5: Iterate Documents with a Block
+### Example 5: Streaming a Large File with a Block
 
-Pass a block to receive each recovered document one at a time:
+For input larger than memory, pass a block. Each recovered document is yielded one at a time:
 
 ```ruby
 SmarterJSON.process_file("events.ndjson") { |event| EventJob.perform_async(event) }
@@ -116,6 +116,8 @@ A `#`/`//` only starts a comment when preceded by whitespace, so `http://example
 
 ### Example 10: Wrapper Noise Around a Payload
 
+#### Fenced payload
+
 ```ruby
 SmarterJSON.process(<<~TEXT)
   Here is the JSON:
@@ -127,15 +129,38 @@ SmarterJSON.process(<<~TEXT)
   ```
 TEXT
 # => {"a"=>1}
+```
 
+#### Prose before / after the payload
+
+```ruby
+SmarterJSON.process(<<~TEXT)
+  Here is the result:
+
+  {
+    "a": 1
+  }
+
+  Hope this helps.
+TEXT
+# => {"a"=>1}
+```
+
+#### Wrapper tags
+
+```ruby
 SmarterJSON.process("<json>{\"a\":1}</json>")
 # => {"a"=>1}
+```
 
+#### Multiple recovered payloads from one noisy blob
+
+```ruby
 SmarterJSON.process(<<~TEXT)
-  first:
+  first attempt:
   {"a":1}
 
-  second:
+  corrected payload:
   {"b":2}
 TEXT
 # => [{"a"=>1}, {"b"=>2}]

@@ -41,6 +41,18 @@ static VALUE fj_sym_duplicate_key;
 static ID    fj_bigdecimal_id; /* cached BigDecimal() method id (set in Init) */
 static ID    fj_to_sym_id;     /* cached :to_sym (symbolize_keys) */
 static ID    fj_key_p_id;      /* cached :key? (non-default duplicate_key modes) */
+static ID    fj_force_encoding_id;
+static ID    fj_valid_encoding_p_id;
+static ID    fj_encoding_id;
+static ID    fj_name_id;
+static VALUE fj_sym_encoding;
+static VALUE fj_sym_symbolize_keys;
+static VALUE fj_sym_first_wins;
+static VALUE fj_sym_raise;
+static VALUE fj_sym_bigdecimal_load;
+static VALUE fj_sym_float;
+static VALUE fj_sym_bigdecimal;
+static VALUE fj_sym_on_warning;
 
 /* Per-parse direct-mapped key cache: key bytes -> the interned (frozen,
  * globally-rooted) String, so repeated keys skip the global fstring lookup.
@@ -373,11 +385,17 @@ static void fj_consume_keyword(fj_state *st, const char *word) {
   fj_advance(st, n);
 }
 
-/* Copy a byte range into a fresh String, dropping underscores. */
+/* Copy a byte range into a fresh String, dropping underscores. Copies whole
+ * underscore-free runs in bulk, rather than one byte at a time. */
 static VALUE fj_strip_underscores(const char *p, long n) {
   VALUE s = rb_str_buf_new(n);
-  long i;
-  for (i = 0; i < n; i++) if (p[i] != '_') rb_str_buf_cat(s, p + i, 1);
+  long i = 0;
+  while (i < n) {
+    long start = i;
+    while (i < n && p[i] != '_') i++;
+    if (i > start) rb_str_buf_cat(s, p + start, i - start);
+    if (i < n) i++; /* skip '_' */
+  }
   return s;
 }
 
@@ -1379,14 +1397,14 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
 
   Check_Type(input, T_STRING);
 
-  enc_opt = rb_hash_aref(opts, ID2SYM(rb_intern("encoding")));
+  enc_opt = rb_hash_aref(opts, fj_sym_encoding);
   if (!NIL_P(enc_opt)) {
-    input = rb_funcall(rb_str_dup(input), rb_intern("force_encoding"), 1, enc_opt);
+    input = rb_funcall(rb_str_dup(input), fj_force_encoding_id, 1, enc_opt);
   }
-  if (!RTEST(rb_funcall(input, rb_intern("valid_encoding?"), 0))) {
-    VALUE name = rb_funcall(rb_funcall(input, rb_intern("encoding"), 0), rb_intern("name"), 0);
+  if (!RTEST(rb_funcall(input, fj_valid_encoding_p_id, 0))) {
+    VALUE name = rb_funcall(rb_funcall(input, fj_encoding_id, 0), fj_name_id, 0);
     VALUE msg = rb_sprintf("invalid byte sequence for %" PRIsVALUE, name);
-    rb_exc_raise(rb_funcall(cEncodingError, rb_intern("new"), 3, msg, Qnil, Qnil));
+    rb_exc_raise(rb_funcall(cEncodingError, fj_new_id, 3, msg, Qnil, Qnil));
   }
 
   st.buf = RSTRING_PTR(input);
@@ -1402,19 +1420,19 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
   st.kcache = NULL;
 #endif
 
-  st.symbolize_keys = RTEST(rb_hash_aref(opts, ID2SYM(rb_intern("symbolize_keys"))));
-  dk = rb_hash_aref(opts, ID2SYM(rb_intern("duplicate_key")));
-  st.dup_first_wins = (dk == ID2SYM(rb_intern("first_wins")));
-  st.dup_raise = (dk == ID2SYM(rb_intern("raise")));
+  st.symbolize_keys = RTEST(rb_hash_aref(opts, fj_sym_symbolize_keys));
+  dk = rb_hash_aref(opts, fj_sym_duplicate_key);
+  st.dup_first_wins = (dk == fj_sym_first_wins);
+  st.dup_raise = (dk == fj_sym_raise);
 
   {
-    VALUE bd = rb_hash_aref(opts, ID2SYM(rb_intern("bigdecimal_load")));
-    if (bd == ID2SYM(rb_intern("float"))) st.bigdecimal_load = 0;
-    else if (bd == ID2SYM(rb_intern("bigdecimal"))) st.bigdecimal_load = 2;
+    VALUE bd = rb_hash_aref(opts, fj_sym_bigdecimal_load);
+    if (bd == fj_sym_float) st.bigdecimal_load = 0;
+    else if (bd == fj_sym_bigdecimal) st.bigdecimal_load = 2;
     else st.bigdecimal_load = 1; /* :auto (default), including nil */
   }
 
-  st.on_warning = rb_hash_aref(opts, ID2SYM(rb_intern("on_warning"))); /* Qnil when absent */
+  st.on_warning = rb_hash_aref(opts, fj_sym_on_warning); /* Qnil when absent */
 
   if (st.len >= 3 && (unsigned char)st.buf[0] == 0xEF &&
       (unsigned char)st.buf[1] == 0xBB && (unsigned char)st.buf[2] == 0xBF) {
@@ -1465,8 +1483,20 @@ void Init_smarter_json(void) {
   fj_key_p_id = rb_intern("key?");
   fj_new_id = rb_intern("new");
   fj_call_id = rb_intern("call");
+  fj_force_encoding_id = rb_intern("force_encoding");
+  fj_valid_encoding_p_id = rb_intern("valid_encoding?");
+  fj_encoding_id = rb_intern("encoding");
+  fj_name_id = rb_intern("name");
   fj_sym_empty_slot = ID2SYM(rb_intern("empty_slot"));
   fj_sym_empty_value = ID2SYM(rb_intern("empty_value"));
   fj_sym_duplicate_key = ID2SYM(rb_intern("duplicate_key"));
+  fj_sym_encoding = ID2SYM(rb_intern("encoding"));
+  fj_sym_symbolize_keys = ID2SYM(rb_intern("symbolize_keys"));
+  fj_sym_first_wins = ID2SYM(rb_intern("first_wins"));
+  fj_sym_raise = ID2SYM(rb_intern("raise"));
+  fj_sym_bigdecimal_load = ID2SYM(rb_intern("bigdecimal_load"));
+  fj_sym_float = ID2SYM(rb_intern("float"));
+  fj_sym_bigdecimal = ID2SYM(rb_intern("bigdecimal"));
+  fj_sym_on_warning = ID2SYM(rb_intern("on_warning"));
   rb_define_module_function(mSmarterJSON, "parse_c", fj_parse_c, 2);
 }

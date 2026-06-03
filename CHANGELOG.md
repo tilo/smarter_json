@@ -3,6 +3,10 @@
 
 > 🚧 Getting ready for the 1.0.0 release - sorry for the interface changes - thank you for your patience! 🚧
 
+## 0.9.0 (2026-06-03)
+- performance improvements
+- code cleanup
+
 ## 0.8.0 (2026-06-03)
 - **Robustness** against LLM-generated / wrapped JSON:
   - strips markdown code fences (```json / ```)

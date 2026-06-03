@@ -25,6 +25,39 @@ SmarterJSON.process("host: localhost\nport: 5432")     # => {"host"=>"localhost"
 `process` is polymorphic: its first argument is **either a String of JSON content or an IO to read from**. A String is always treated as content, never as a filename — use `process_file` for paths. When the input wraps the payload in obvious markdown / prose / tags, `process` strips that wrapper first and then parses the recovered payload(s).
 
 ```ruby
+SmarterJSON.process(<<~TEXT)
+  Here is the JSON:
+
+  ```json
+  {
+    "a": 1
+  }
+  ```
+TEXT
+# => {"a"=>1}
+
+SmarterJSON.process(<<~TEXT)
+  Here is the result:
+
+  {
+    "a": 1
+  }
+
+  Hope this helps.
+TEXT
+# => {"a"=>1}
+
+SmarterJSON.process(<<~TEXT)
+  first attempt:
+  {"a":1}
+
+  corrected payload:
+  {"b":2}
+TEXT
+# => [{"a"=>1}, {"b"=>2}]
+```
+
+```ruby
 SmarterJSON.process(io)         # an open IO (File, StringIO, socket, …) — reads it and parses
 SmarterJSON.process(some_string) # JSON content
 ```
@@ -49,9 +82,9 @@ SmarterJSON.process_file("config.json5")     # read the file, then parse — sam
 
 `process_file` opens the file, reads it with the labeled [`encoding:`](./options.md) (default `"UTF-8"`, no transcoding pass), and parses it.
 
-## Streaming with a block
+## Streaming with a block (bounded memory)
 
-Pass a block to have each recovered top-level document yielded one at a time; the method returns `nil` instead of collecting the documents into an Array. Both `process` and `process_file` forward the block.
+For input larger than memory, pass a block. Each recovered top-level document is yielded as it is framed, and the method returns `nil` instead of collecting the documents into an Array. Both `process` and `process_file` forward the block.
 
 ```ruby
 SmarterJSON.process_file("events.ndjson") { |event| EventJob.perform_async(event) }

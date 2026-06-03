@@ -63,16 +63,283 @@ module SmarterJSON
     end
   end
 
-  # Stream documents from an IO, one line (= one document) at a time, yielding
-  # each — bounded memory. Newline-delimited (NDJSON / JSONL); a single document
-  # spanning multiple lines is not supported by the streaming path.
+  # Stream documents from an IO incrementally, yielding each recovered top-level
+  # document without slurping the whole input into memory first.
   def stream_io(io, options, &block)
-    Recovery.process_string(io.read, options, &block)
+    Framer.each_document(io) { |doc| Recovery.process_string(doc, options, &block) }
+    nil
   end
 
   private_class_method :process_content, :stream_io
 
+  # Named byte values, shared by the Parser FSM and the Framer / Recovery byte
+  # scanners so none of them spell out raw hex. Included where needed.
+  module Bytes
+    LBRACE     = 0x7B
+    RBRACE     = 0x7D
+    LBRACKET   = 0x5B
+    RBRACKET   = 0x5D
+    COLON      = 0x3A
+    COMMA      = 0x2C
+    DQUOTE     = 0x22
+    SQUOTE     = 0x27
+    BACKSLASH  = 0x5C
+    SLASH      = 0x2F
+    STAR       = 0x2A
+    HASH       = 0x23
+    MINUS      = 0x2D
+    PLUS       = 0x2B
+    DOT        = 0x2E
+    ZERO       = 0x30
+    NINE       = 0x39
+    LOWER_E    = 0x65
+    UPPER_E    = 0x45
+    LOWER_T    = 0x74
+    LOWER_F    = 0x66
+    LOWER_N    = 0x6E
+    LOWER_U    = 0x75
+    LOWER_X    = 0x78
+    UPPER_X    = 0x58
+    UPPER_I    = 0x49
+    UPPER_N    = 0x4E
+    UPPER_T    = 0x54
+    UPPER_F    = 0x46
+    UNDERSCORE = 0x5F
+    DOLLAR     = 0x24
+    SPACE      = 0x20
+    TAB        = 0x09
+    LF         = 0x0A
+    CR         = 0x0D
+  end
+
+  module Framer
+    include Bytes
+
+    CHUNK_SIZE = 16 * 1024
+
+    module_function
+
+    def each_document(io, &block)
+      buffer = +""
+      scan = 0
+      doc_start = nil
+      stack = []
+      mode = nil
+
+      while (chunk = read_chunk(io))
+        buffer << chunk
+        loop do
+          emitted, buffer, scan, doc_start, stack, mode = scan_buffer(buffer, scan, doc_start, stack, mode)
+          break unless emitted
+
+          yield emitted
+        end
+      end
+
+      yield buffer unless separators_only?(buffer)
+    end
+
+    def read_chunk(io)
+      if io.respond_to?(:readpartial)
+        io.readpartial(CHUNK_SIZE)
+      else
+        io.read(CHUNK_SIZE)
+      end
+    rescue EOFError
+      nil
+    end
+
+    def scan_buffer(buffer, scan, doc_start, stack, mode)
+      while scan < buffer.bytesize
+        b = buffer.getbyte(scan)
+        # A multi-byte marker (// /* ''' */) whose lead byte is here but whose
+        # remaining bytes have not arrived yet must not be guessed at — advancing
+        # past the lead byte would misread the brace/quote that follows it once the
+        # next chunk lands. Stop and let each_document append more input, then resume
+        # from this same position. At true EOF the leftover is parsed whole instead.
+        break if defer_for_split_marker?(buffer, scan, b, mode, doc_start)
+
+        if mode == :double
+          if b == BACKSLASH
+            scan += 2
+          elsif b == DQUOTE
+            mode = nil
+            scan += 1
+          else
+            scan += 1
+          end
+        elsif mode == :single
+          if b == BACKSLASH
+            scan += 2
+          elsif b == SQUOTE
+            mode = nil
+            scan += 1
+          else
+            scan += 1
+          end
+        elsif mode == :triple
+          if buffer.byteslice(scan, 3) == "'''"
+            mode = nil
+            scan += 3
+          else
+            scan += 1
+          end
+        elsif mode == :line_comment
+          if [LF, CR].include?(b)
+            mode = nil
+          else
+            scan += 1
+            next
+          end
+        elsif mode == :block_comment
+          if buffer.byteslice(scan, 2) == '*/'
+            mode = nil
+            scan += 2
+          else
+            scan += 1
+          end
+        elsif doc_start.nil?
+          if whitespace_byte?(b)
+            scan += 1
+          elsif line_comment_start?(buffer, scan)
+            mode = :line_comment
+            scan += buffer.getbyte(scan) == HASH ? 1 : 2
+          elsif block_comment_start?(buffer, scan)
+            mode = :block_comment
+            scan += 2
+          elsif [LBRACE, LBRACKET].include?(b)
+            doc_start = scan
+            stack << b
+            scan += 1
+          else
+            scan = buffer.bytesize
+          end
+        else
+          if mode.nil? && line_comment_start?(buffer, scan)
+            mode = :line_comment
+            scan += buffer.getbyte(scan) == HASH ? 1 : 2
+          elsif mode.nil? && block_comment_start?(buffer, scan)
+            mode = :block_comment
+            scan += 2
+          elsif b == DQUOTE
+            mode = :double
+            scan += 1
+          elsif buffer.byteslice(scan, 3) == "'''"
+            mode = :triple
+            scan += 3
+          elsif b == SQUOTE
+            mode = :single
+            scan += 1
+          elsif [LBRACE, LBRACKET].include?(b)
+            stack << b
+            scan += 1
+          elsif b == RBRACE
+            stack.pop if stack.last == LBRACE
+            scan += 1
+            if stack.empty?
+              doc = buffer.byteslice(doc_start, scan - doc_start)
+              buffer = buffer.byteslice(scan..-1) || +""
+              return [doc, buffer, 0, nil, [], nil]
+            end
+          elsif b == RBRACKET
+            stack.pop if stack.last == LBRACKET
+            scan += 1
+            if stack.empty?
+              doc = buffer.byteslice(doc_start, scan - doc_start)
+              buffer = buffer.byteslice(scan..-1) || +""
+              return [doc, buffer, 0, nil, [], nil]
+            end
+          else
+            scan += 1
+          end
+        end
+      end
+
+      [nil, buffer, scan, doc_start, stack, mode]
+    end
+
+    # True when `b` is the lead byte of a multi-byte marker but the rest of that
+    # marker has not been read into the buffer yet, so we cannot decide what it is.
+    # `//` and `/*` need 2 bytes; `'''` (and a closing `'''`) needs 3; a closing
+    # `*/` needs 2. Backslash escapes and single-byte delimiters never need this.
+    def defer_for_split_marker?(buffer, scan, b, mode, doc_start)
+      avail = buffer.bytesize - scan
+      case mode
+      when :block_comment
+        b == STAR && avail < 2
+      when :triple
+        b == SQUOTE && avail < 3
+      when nil
+        if doc_start.nil?
+          b == SLASH && avail < 2
+        else
+          (b == SLASH && avail < 2) || (b == SQUOTE && avail < 3)
+        end
+      else
+        false
+      end
+    end
+
+    def separators_only?(buffer)
+      scan = 0
+      mode = nil
+      while scan < buffer.bytesize
+        b = buffer.getbyte(scan)
+        if mode == :line_comment
+          if [LF, CR].include?(b)
+            mode = nil
+          else
+            scan += 1
+            next
+          end
+        elsif mode == :block_comment
+          if buffer.byteslice(scan, 2) == '*/'
+            mode = nil
+            scan += 2
+          else
+            scan += 1
+          end
+        elsif whitespace_byte?(b)
+          scan += 1
+        elsif line_comment_start?(buffer, scan)
+          mode = :line_comment
+          scan += buffer.getbyte(scan) == HASH ? 1 : 2
+        elsif block_comment_start?(buffer, scan)
+          mode = :block_comment
+          scan += 2
+        else
+          return false
+        end
+      end
+      true
+    end
+
+    def whitespace_byte?(b)
+      b == SPACE || (b && b >= TAB && b <= CR)
+    end
+
+    def line_comment_start?(buffer, scan)
+      b = buffer.getbyte(scan)
+      return preceded_by_ws_or_start?(buffer, scan) if b == HASH
+
+      b == SLASH && buffer.getbyte(scan + 1) == SLASH && preceded_by_ws_or_start?(buffer, scan)
+    end
+
+    def block_comment_start?(buffer, scan)
+      buffer.getbyte(scan) == SLASH && buffer.getbyte(scan + 1) == STAR && preceded_by_ws_or_start?(buffer, scan)
+    end
+
+    def preceded_by_ws_or_start?(buffer, scan)
+      return true if scan.zero?
+
+      prev = buffer.getbyte(scan - 1)
+      whitespace_byte?(prev)
+    end
+  end
+
   module Recovery
+    include Bytes
+
     module_function
 
     def process_string(input, options, &block)
@@ -93,9 +360,9 @@ module SmarterJSON
       raise
     end
 
+    # Caller (process_string) has already established the input is valid_encoding?,
+    # so we do not re-check it here.
     def wrapper_hint?(input)
-      return false unless input.valid_encoding?
-
       input.match?(/```|<json\b|BEGIN_JSON\b/i) || input.match?(/\A[[:space:]]*(?:JSON|Final answer)[[:space:]]*:/i)
     end
 
@@ -146,14 +413,29 @@ module SmarterJSON
       last = ranges.last
       prefix = input.byteslice(0, first.begin)
       suffix = input.byteslice(last.end, input.bytesize - last.end)
+      # Look for fence / wrapper markers only in the text we actually strip (outside
+      # every recovered payload), so a ``` or <json> sitting inside a payload's own
+      # string value does not trigger a "stripped a wrapper" warning.
+      outside = non_payload_text(input, ranges)
       {
         prefix: substantive_text?(prefix),
         suffix: substantive_text?(suffix),
-        fence: input.match?(/```/),
-        wrapper: input.match?(/<json\b|BEGIN_JSON\b/i),
+        fence: outside.include?("```"),
+        wrapper: outside.match?(/<json\b|BEGIN_JSON\b/i),
         first_pos: line_col_for(input, first.begin),
         last_pos: line_col_for(input, last.begin)
       }
+    end
+
+    def non_payload_text(input, ranges)
+      out = +""
+      pos = 0
+      ranges.each do |range|
+        out << input.byteslice(pos, range.begin - pos) if range.begin > pos
+        pos = range.end
+      end
+      out << input.byteslice(pos, input.bytesize - pos) if pos < input.bytesize
+      out
     end
 
     def line_col_for(input, offset)
@@ -164,15 +446,15 @@ module SmarterJSON
         b = input.getbyte(i)
         break if b.nil?
 
-        if b == 0x0A
+        if b == LF
           line += 1
           col = 1
           i += 1
-        elsif b == 0x0D
+        elsif b == CR
           line += 1
           col = 1
           i += 1
-          i += 1 if i < offset && input.getbyte(i) == 0x0A
+          i += 1 if i < offset && input.getbyte(i) == LF
         else
           col += 1
           i += 1
@@ -203,19 +485,19 @@ module SmarterJSON
       while i < input.bytesize
         b = input.getbyte(i)
         if mode == :double
-          if b == 0x5C
+          if b == BACKSLASH
             i += 2
             next
-          elsif b == 0x22
+          elsif b == DQUOTE
             mode = nil
           end
           i += 1
           next
         elsif mode == :single
-          if b == 0x5C
+          if b == BACKSLASH
             i += 2
             next
-          elsif b == 0x27
+          elsif b == SQUOTE
             mode = nil
           end
           i += 1
@@ -229,7 +511,7 @@ module SmarterJSON
           end
           next
         elsif mode == :line_comment
-          if [0x0A, 0x0D].include?(b)
+          if [LF, CR].include?(b)
             mode = nil
           else
             i += 1
@@ -252,11 +534,11 @@ module SmarterJSON
             mode = :block_comment
             i += 2
             next
-          elsif b == 0x23
+          elsif b == HASH
             mode = :line_comment
             i += 1
             next
-          elsif b == 0x22
+          elsif b == DQUOTE
             mode = :double
             i += 1
             next
@@ -264,21 +546,21 @@ module SmarterJSON
             mode = :triple
             i += 3
             next
-          elsif b == 0x27
+          elsif b == SQUOTE
             mode = :single
             i += 1
             next
-          elsif [0x7B, 0x5B].include?(b)
+          elsif [LBRACE, LBRACKET].include?(b)
             start_pos = i if stack.empty?
             stack << b
-          elsif b == 0x7D
-            stack.pop if stack.last == 0x7B
+          elsif b == RBRACE
+            stack.pop if stack.last == LBRACE
             if stack.empty? && start_pos
               ranges << (start_pos...(i + 1))
               start_pos = nil
             end
-          elsif b == 0x5D
-            stack.pop if stack.last == 0x5B
+          elsif b == RBRACKET
+            stack.pop if stack.last == LBRACKET
             if stack.empty? && start_pos
               ranges << (start_pos...(i + 1))
               start_pos = nil
@@ -304,41 +586,7 @@ module SmarterJSON
   #          Python literals (True/False/None) and undefined, underscores in
   #          numeric literals, and encoding validation (SmarterJSON::EncodingError).
   class Parser
-    LBRACE     = 0x7B
-    RBRACE     = 0x7D
-    LBRACKET   = 0x5B
-    RBRACKET   = 0x5D
-    COLON      = 0x3A
-    COMMA      = 0x2C
-    DQUOTE     = 0x22
-    SQUOTE     = 0x27
-    BACKSLASH  = 0x5C
-    SLASH      = 0x2F
-    STAR       = 0x2A
-    HASH       = 0x23
-    MINUS      = 0x2D
-    PLUS       = 0x2B
-    DOT        = 0x2E
-    ZERO       = 0x30
-    NINE       = 0x39
-    LOWER_E    = 0x65
-    UPPER_E    = 0x45
-    LOWER_T    = 0x74
-    LOWER_F    = 0x66
-    LOWER_N    = 0x6E
-    LOWER_U    = 0x75
-    LOWER_X    = 0x78
-    UPPER_X    = 0x58
-    UPPER_I    = 0x49
-    UPPER_N    = 0x4E
-    UPPER_T    = 0x54
-    UPPER_F    = 0x46
-    UNDERSCORE = 0x5F
-    DOLLAR     = 0x24
-    SPACE      = 0x20
-    TAB        = 0x09
-    LF         = 0x0A
-    CR         = 0x0D
+    include Bytes
 
     NOT_NUMERIC = Object.new
     HEX_RE      = /\A[-+]?0[xX][0-9a-fA-F_]+\z/.freeze
