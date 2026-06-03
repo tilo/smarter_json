@@ -11,7 +11,7 @@
 
 # Examples
 
-**Rescue from `SmarterJSON::Error` (recommended):** SmarterJSON raises only on genuinely unparseable input (an unterminated string, a mismatched bracket), with line and column in the message. Rescuing from `SmarterJSON::Error` lets your application handle bad input gracefully.
+**Rescue from `SmarterJSON::Error` (recommended):** SmarterJSON raises only on genuinely unreadable input (an unterminated string, a mismatched bracket), with line and column in the message. Rescuing from `SmarterJSON::Error` lets your application handle bad input gracefully.
 
 ---
 
@@ -42,10 +42,10 @@ SmarterJSON.process('{"a": 1, "b": [2, 3]}')   # => {"a"=>1, "b"=>[2, 3]}
 ### Example 2: Read a JSON File
 
 ```ruby
-SmarterJSON.process_file("config.json")        # => the parsed value
+SmarterJSON.process_file("config.json")        # => the extracted data
 ```
 
-`process_file` opens the file, reads it with the labeled [`encoding:`](./options.md) (default `"UTF-8"`), and parses it.
+`process_file` opens the file, reads it with the labeled [`encoding:`](./options.md) (default `"UTF-8"`), and processes it.
 
 ### Example 3: Implicit Root Object (config-style, no braces)
 

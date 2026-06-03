@@ -20,7 +20,7 @@ These options are passed to [`SmarterJSON.process`](./basic_read_api.md) and `Sm
 | `:symbolize_keys` | `false`      | Return object keys as Symbols instead of Strings.                                                                      |
 | `:duplicate_key`  | `:last_wins` | How to handle a key that repeats within one object: `:last_wins`, `:first_wins`, or `:raise`.                          |
 | `:bigdecimal_load`| `:auto`      | `:auto` keeps high-precision decimals as `BigDecimal` (matches Oj); `:float` forces every number to `Float`; `:bigdecimal` forces every decimal to `BigDecimal`. |
-| `:acceleration`   | `true`       | Use the C extension when it is compiled and loadable; `false` forces the pure-Ruby parser. Both produce identical results. |
+| `:acceleration`   | `true`       | Use the C extension when it is compiled and loadable; `false` forces the pure-Ruby implementation. Both produce identical results. |
 | `:encoding`       | `nil`        | Labels the input's encoding (e.g. `"UTF-8"`). It does **not** trigger a transcoding pass — see below.                  |
 | `:on_warning`     | `nil`        | A callable invoked once per lenient fix applied, passed a `SmarterJSON::Warning`. Never changes the return value. See below. |
 
@@ -33,7 +33,7 @@ SmarterJSON.process("[1,,2]", on_warning: ->(w) { puts w })         # => [1, 2],
 
 ### A note on `:on_warning`
 
-`smarter_json` is lenient by design — it salvages your data instead of rejecting the whole document over a stray comma. `on_warning:` keeps that, but also hands you a record of what it had to fix, so leniency is transparent rather than silent. It takes a callable that the parser invokes once per fix, passing a `SmarterJSON::Warning` (with `type` (a Symbol), `message`, `line`, and `col`). It never changes the return value — `process` still hands back the bare value — and it fires on every path, including the streaming block form. With no handler (the default), nothing is recorded and there is zero overhead.
+`smarter_json` is lenient by design — it salvages your data instead of rejecting the whole document over a stray comma. `on_warning:` keeps that, but also hands you a record of what it had to fix, so leniency is transparent rather than silent. It takes a callable that SmarterJSON invokes once per fix, passing a `SmarterJSON::Warning` (with `type` (a Symbol), `message`, `line`, and `col`). It never changes the return value — `process` still hands back the bare value — and it fires on every path, including the streaming block form. With no handler (the default), nothing is recorded and there is zero overhead.
 
 ```ruby
 warns = []
@@ -47,7 +47,7 @@ The warning types are `:empty_slot` (a collapsed empty comma slot, e.g. `[1,,2]`
 
 ### A note on `:encoding`
 
-`:encoding` labels what the input *is* — it does not transcode. The parser works on the bytes in their native encoding and emits string values with the same encoding tag, the same way `smarter_csv` handles encodings. Bytes that are invalid for the claimed encoding raise `SmarterJSON::EncodingError` (a kind of `SmarterJSON::ParseError`). A UTF-8 BOM is handled automatically; UTF-16 / UTF-32 input is out of scope.
+`:encoding` labels what the input *is* — it does not transcode. SmarterJSON works on the bytes in their native encoding and emits string values with the same encoding tag, the same way `smarter_csv` handles encodings. Bytes that are invalid for the claimed encoding raise `SmarterJSON::EncodingError` (a kind of `SmarterJSON::ParseError`). A UTF-8 BOM is handled automatically; UTF-16 / UTF-32 input is out of scope.
 
 ### A note on `:bigdecimal_load`
 

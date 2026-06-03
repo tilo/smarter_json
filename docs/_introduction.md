@@ -11,7 +11,7 @@
 
 # SmarterJSON Introduction
 
-`smarter_json` is a fast, lenient JSON parser and writer for Ruby. It reads strict JSON, JSON5, HJSON-style config, newline-delimited JSON (NDJSON / JSONL), markdown-wrapped / chatty blobs around a JSON payload, and the messy JSON-ish input humans actually paste — and in benchmarks it matches or beats Oj on nearly every file. It is opinionated: it optimizes for getting your data out, not for policing the JSON spec. Where other parsers stop at the first deviation, SmarterJSON keeps going.
+`smarter_json` is a fast, lenient JSON processor for Ruby. It reads strict JSON, JSON5, HJSON-style config, newline-delimited JSON (NDJSON / JSONL), markdown-wrapped / chatty blobs around a JSON payload, and the messy JSON-ish input humans actually paste — and in benchmarks it matches or beats Oj on nearly every file. It is opinionated: it optimizes for getting your data out, not for policing the JSON spec. Where other parsers stop at the first deviation, SmarterJSON keeps going.
 
 ## Why another JSON library?
 
@@ -23,7 +23,7 @@ Most JSON parsers reject anything that isn't perfectly strict JSON, and they mak
 
 * **It reads multi-document input automatically — a distinguishing feature.** `SmarterJSON.process` handles NDJSON / JSONL / concatenated JSON with **no block and no special method**: zero documents returns `nil`, one document returns its value, two or more return an `Array`. The same rule applies when wrapper noise is stripped and several payloads are recovered from one blob. **Only SmarterJSON reads multi-document input via plain `process` — Oj and the stdlib `json` library raise without a block.** For input larger than memory, pass a block to stream one document at a time. See [The Basic Read API](./basic_read_api.md).
 
-* **It's fast.** A C extension (with a pure-Ruby fallback that runs everywhere) puts it ahead of Oj on nearly every file we benchmark, and competitive with the stdlib `json` C parser. Floats are parsed with Ryū (correctly rounded, single-pass), so number-heavy data is fast and bit-exact.
+* **It's fast.** A C extension (with a pure-Ruby fallback that runs everywhere) puts it ahead of Oj on nearly every file we benchmark, and competitive with the stdlib `json` C parser. Floats are decoded with Ryū (correctly rounded, single-pass), so number-heavy data is fast and bit-exact.
 
 * **It writes JSON too.** `SmarterJSON.generate` turns Ruby values into strict, interoperable JSON — or into NDJSON, one element per line, the exact inverse of reading NDJSON back into an Array. See [The Basic Write API](./basic_write_api.md).
 
@@ -37,11 +37,11 @@ Most JSON parsers reject anything that isn't perfectly strict JSON, and they mak
 * Mixed CR / LF / CRLF line endings, and any Ruby-supported input encoding (via `encoding:`)
 * Duplicate keys (last value wins by default; configurable — see [Configuration Options](./options.md))
 
-It raises only on genuinely unparseable input (unterminated string, mismatched bracket), with line and column in the message — never on valid-but-lenient input.
+It raises only on genuinely unreadable input (unterminated string, mismatched bracket), with line and column in the message — never on valid-but-lenient input.
 
 ## Nesting & untrusted input
 
-Both the C extension and the pure-Ruby parser are **iterative, not recursive** — they track nesting on an explicit, heap-allocated stack rather than the call stack. So deeply nested input **cannot overflow the call stack or segfault**: nesting is bounded only by available memory, the same posture as Oj (the stdlib `json` caps at 100). The trade-off: there is currently **no fixed nesting or input-size limit**, so size-limit untrusted input upstream of the parser.
+Both the C extension and the pure-Ruby engine are **iterative, not recursive** — they track nesting on an explicit, heap-allocated stack rather than the call stack. So deeply nested input **cannot overflow the call stack or segfault**: nesting is bounded only by available memory, the same posture as Oj (the stdlib `json` caps at 100). The trade-off: there is currently **no fixed nesting or input-size limit**, so size-limit untrusted input upstream.
 
 ---------------
 

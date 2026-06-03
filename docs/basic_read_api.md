@@ -22,7 +22,7 @@ SmarterJSON.process('{"a": 1, "b": [2, 3]}')          # => {"a"=>1, "b"=>[2, 3]}
 SmarterJSON.process("host: localhost\nport: 5432")     # => {"host"=>"localhost", "port"=>5432}  (no braces needed)
 ```
 
-`process` is polymorphic: its first argument is **either a String of JSON content or an IO to read from**. A String is always treated as content, never as a filename — use `process_file` for paths. When the input wraps the payload in obvious markdown / prose / tags, `process` strips that wrapper first and then parses the recovered payload(s).
+`process` is polymorphic: its first argument is **either a String of JSON content or an IO to read from**. A String is always treated as content, never as a filename — use `process_file` for paths. When the input wraps the payload in obvious markdown / prose / tags, `process` strips that wrapper first and then reads the recovered payload(s).
 
 ````ruby
 SmarterJSON.process(<<~TEXT)
@@ -58,7 +58,7 @@ TEXT
 ````
 
 ```ruby
-SmarterJSON.process(io)         # an open IO (File, StringIO, socket, …) — reads it and parses
+SmarterJSON.process(io)         # an open IO (File, StringIO, socket, …) — reads it and extracts the data
 SmarterJSON.process(some_string) # JSON content
 ```
 
@@ -77,10 +77,10 @@ Documents are separated by whitespace, newlines, or simple concatenation — **n
 ## `SmarterJSON.process_file` — read a file by path
 
 ```ruby
-SmarterJSON.process_file("config.json5")     # read the file, then parse — same return-value rules as process
+SmarterJSON.process_file("config.json5")     # read the file, then process — same return-value rules as process
 ```
 
-`process_file` opens the file, reads it with the labeled [`encoding:`](./options.md) (default `"UTF-8"`, no transcoding pass), and parses it.
+`process_file` opens the file, reads it with the labeled [`encoding:`](./options.md) (default `"UTF-8"`, no transcoding pass), and processes it.
 
 ## Streaming with a block (bounded memory)
 
@@ -95,7 +95,7 @@ The streaming path now frames whole top-level documents, not just one line at a 
 
 ## The C extension and the pure-Ruby fallback
 
-By default (`acceleration: true`) the C extension is used when it is compiled and loadable (`SmarterJSON::HAS_ACCELERATION` is then `true`); otherwise the pure-Ruby parser runs and produces identical results. Pass `acceleration: false` to force the pure-Ruby path. See [Configuration Options](./options.md).
+By default (`acceleration: true`) the C extension is used when it is compiled and loadable (`SmarterJSON::HAS_ACCELERATION` is then `true`); otherwise the pure-Ruby implementation runs and produces identical results. Pass `acceleration: false` to force the pure-Ruby path. See [Configuration Options](./options.md).
 
 ## Seeing what was fixed: `on_warning:`
 
