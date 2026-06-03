@@ -57,10 +57,9 @@ module SmarterJSON
         Parser.new(input, options).each_value(&block)
       end
     elsif options.fetch(:acceleration, true) && HAS_ACCELERATION
-      parse_c(input, options) # returns [result, warnings] when options[:warnings]
+      parse_c(input, options)
     else
-      parser = Parser.new(input, options)
-      options.fetch(:warnings, false) ? [parser.parse, parser.warnings] : parser.parse
+      Parser.new(input, options).parse
     end
   end
 
@@ -143,13 +142,8 @@ module SmarterJSON
       symbolize_keys: false, # Symbol keys instead of String
       duplicate_key: :last_wins, # :last_wins | :first_wins | :raise
       bigdecimal_load: :auto, # :auto | :float | :bigdecimal (Oj-compatible)
-      warnings: false, # collect non-fatal lenient fixes; process returns [result, warnings]
+      on_warning: nil, # a callable invoked once per non-fatal lenient fix (a SmarterJSON::Warning)
     }.freeze
-
-    # Warnings collected during the parse (empty slots, empty values, dropped duplicate
-    # keys). Empty unless the parser was built with warnings: true. Public so the module
-    # functions can read it after parse / each_value.
-    attr_reader :warnings
 
     def initialize(input, options = {})
       raise ArgumentError, "input must be a String" unless input.is_a?(String)
@@ -158,8 +152,7 @@ module SmarterJSON
       @symbolize_keys  = opts[:symbolize_keys]
       @duplicate_key   = opts[:duplicate_key]
       @bigdecimal_load = opts[:bigdecimal_load]
-      @collect_warnings = opts[:warnings]
-      @warnings = []
+      @on_warning      = opts[:on_warning]
 
       encoding = opts[:encoding]
       @input = encoding ? input.dup.force_encoding(encoding) : input
@@ -263,7 +256,7 @@ module SmarterJSON
           # Commas are collapsing separators inside a container: an empty slot (leading,
           # interior, or trailing comma) adds nothing. Skip it; the next iteration reads
           # the following value/key or the closing bracket.
-          warn(:empty_slot, "extra comma — collapsed an empty slot") unless vss
+          warn(:empty_slot, "extra comma — collapsed an empty slot") if @on_warning && !vss
           vss = false
           advance(1)
         elsif cur_obj
@@ -300,7 +293,7 @@ module SmarterJSON
             elsif [RBRACE, COMMA].include?(b)
               # key with a colon but no value -> null (don't consume } or ,; the loop does)
               store_member(cur, key, nil)
-              warn(:empty_value, "key #{key.inspect} had no value — used null")
+              warn(:empty_value, "key #{key.inspect} had no value — used null") if @on_warning
               vss = true
             elsif b.nil?
               raise error("unexpected end of input")
@@ -573,7 +566,7 @@ module SmarterJSON
       if hash.key?(k)
         raise error("duplicate key #{k.inspect}") if @duplicate_key == :raise
 
-        warn(:duplicate_key, "duplicate key #{k.inspect} — #{@duplicate_key}")
+        warn(:duplicate_key, "duplicate key #{k.inspect} — #{@duplicate_key}") if @on_warning
         return if @duplicate_key == :first_wins
       end
       hash[k] = value
@@ -933,11 +926,14 @@ module SmarterJSON
       value
     end
 
-    # Record a non-fatal lenient fix (only when built with warnings: true).
+    # Report a non-fatal lenient fix to the on_warning callable. The call-site guards
+    # (`if @on_warning`) keep the message string from being built on the fast path; this
+    # internal guard is the safety net so a forgotten call-site guard can't crash a
+    # handler-less caller.
     def warn(type, message)
-      return unless @collect_warnings
+      return unless @on_warning
 
-      @warnings << Warning.new(type, message, @line, @col)
+      @on_warning.call(Warning.new(type, message, @line, @col))
     end
 
     def error(message)

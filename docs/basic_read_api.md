@@ -67,18 +67,19 @@ The streaming path reads the input as newline-delimited documents (NDJSON / JSON
 
 By default (`acceleration: true`) the C extension is used when it is compiled and loadable (`SmarterJSON::HAS_ACCELERATION` is then `true`); otherwise the pure-Ruby parser runs and produces identical results. Pass `acceleration: false` to force the pure-Ruby path. See [Configuration Options](./options.md).
 
-## Seeing what was fixed: `warnings:`
+## Seeing what was fixed: `on_warning:`
 
-`process` and `process_file` are lenient — they salvage your data rather than reject a whole document over a stray comma. Pass `warnings: true` to also get back a record of what was adjusted, so the leniency is transparent instead of silent. The call then returns `[result, warnings]`:
+`process` and `process_file` are lenient — they salvage your data rather than reject a whole document over a stray comma. Pass an `on_warning:` callable to also get a record of what was adjusted, so the leniency is transparent instead of silent. It is invoked once per fix and never changes the return value:
 
 ```ruby
-result, warnings = SmarterJSON.process("[1,,2]", warnings: true)
-result               # => [1, 2]
-warnings.map(&:type) # => [:empty_slot]
-warnings.first.to_s  # => "extra comma, collapsed an empty slot at line 1, col 4"
+warns = []
+result = SmarterJSON.process("[1,,2]", on_warning: ->(w) { warns << w })
+result            # => [1, 2]
+warns.map(&:type) # => [:empty_slot]
+warns.first.to_s  # => "extra comma, collapsed an empty slot at line 1, col 4"
 ```
 
-Each warning is a `SmarterJSON::Warning` with `type`, `message`, `line`, and `col`. The types are `:empty_slot` (a collapsed empty comma slot), `:empty_value` (a key with no value, read as `null`), and `:duplicate_key` (a repeated key that was dropped). Clean input gives an empty `warnings` array. It works the same on the C and pure-Ruby paths. See [Configuration Options](./options.md).
+Each warning is a `SmarterJSON::Warning` with `type`, `message`, `line`, and `col`. The types are `:empty_slot` (a collapsed empty comma slot), `:empty_value` (a key with no value, read as `null`), and `:duplicate_key` (a repeated key that was dropped). Clean input never invokes the handler. It fires on every path — including the streaming block form — and works the same on the C and pure-Ruby paths. See [Configuration Options](./options.md).
 
 ---------------
 

@@ -81,7 +81,20 @@ SmarterJSON.process_file("events.ndjson") { |event| EventJob.perform_async(event
 | `bigdecimal_load` | `:auto`      | `:auto` keeps high-precision decimals as `BigDecimal`; `:float` forces `Float`; `:bigdecimal` forces `BigDecimal` |
 | `acceleration`    | `true`       | `true` uses the C extension when compiled and loadable; `false` forces pure Ruby (identical results) |
 | `encoding`        | `"UTF-8"`    | labels the input's encoding (no transcoding pass; see below)            |
-| `warnings`        | `false`      | when `true`, return `[result, warnings]` — `warnings` lists the lenient fixes applied (`:empty_slot`, `:empty_value`, `:duplicate_key`) |
+| `on_warning`      | `nil`        | a callable invoked once per lenient fix applied (`:empty_slot`, `:empty_value`, `:duplicate_key`), passed a `SmarterJSON::Warning`; the return value is never changed. See below. |
+
+### Warnings (`on_warning`)
+
+When the parser quietly fixes something lenient — collapses an empty comma slot, reads a key with no value as `null`, drops a duplicate key — it can tell you, without changing what `process` returns. Pass a callable as `on_warning:`; it is invoked once per fix with a `SmarterJSON::Warning` (`type`, `message`, `line`, `col`). It fires on every path, including the streaming block form. With no handler (the default) nothing is recorded and there is zero overhead.
+
+```ruby
+# Collect them all:
+warns = []
+data  = SmarterJSON.process(input, on_warning: ->(w) { warns << w })
+
+# Or route them — log, count, raise:
+SmarterJSON.process(input, on_warning: ->(w) { Rails.logger.warn(w) })
+```
 
 ## Performance
 

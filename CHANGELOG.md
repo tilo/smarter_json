@@ -1,6 +1,11 @@
 
 # SmarterJSON Change Log
 
+> 🚧 Getting ready for the 1.0.0 release - sorry for the interface changes - thank you for your patience! 🚧
+
+## 0.7.0 (2026-06-02)
+- **Breaking:** replaced the `warnings:` option (and its `[result, warnings]` tuple return) with an `on_warning:` callable. Pass `on_warning: ->(w) { ... }` to be handed each `SmarterJSON::Warning` as the parser applies a lenient fix; `process` / `process_file` now always return the bare value (nil / value / Array) on every path. Unlike the tuple, this also fires on the streaming block form. The default (no handler) records nothing and costs nothing.
+
 ## 0.6.0 (2026-06-02)
 - Lenient comma handling: empty slots around / between commas are collapsed (`[1,,2]` → `[1,2]`, `[,1,]` → `[1]`, `{a:1,,b:2}` → `{a:1,b:2}`), on both the C and Ruby paths. No null is inserted for an empty slot.
 - A key with a colon but no value reads as null: `{a:}` → `{"a"=>nil}` (both paths).

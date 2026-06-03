@@ -34,6 +34,7 @@ static VALUE cParseError;
 static VALUE cEncodingError;
 static VALUE cWarning;
 static ID    fj_new_id;
+static ID    fj_call_id;    /* cached :call (invoking the on_warning handler) */
 static VALUE fj_sym_empty_slot;
 static VALUE fj_sym_empty_value;
 static VALUE fj_sym_duplicate_key;
@@ -60,8 +61,7 @@ typedef struct {
   int dup_raise;
   int bigdecimal_load;  /* 0 = float, 1 = auto, 2 = bigdecimal */
   fj_kc_slot *kcache;   /* per-parse key cache (NULL when interning unavailable) */
-  int collect_warnings; /* warnings: option — record non-fatal lenient fixes */
-  VALUE warnings;       /* rb_ary of SmarterJSON::Warning when collecting, else Qnil */
+  VALUE on_warning;     /* on_warning: callable invoked per non-fatal lenient fix, else Qnil */
 } fj_state;
 
 /* Line/column at the current byte position, computed lazily (only when raising
@@ -81,14 +81,16 @@ static void fj_line_col(fj_state *st, long *line, long *col) {
   *col = c;
 }
 
-/* Record a non-fatal lenient fix — only when the parse was given warnings: true. */
+/* Report a non-fatal lenient fix to the on_warning callable — a no-op (and builds no
+ * Warning) when no handler was given. The internal Qnil guard is the safety net; the
+ * call sites also guard so the line/col scan is skipped on the fast path. */
 static void fj_warn(fj_state *st, VALUE type_sym, const char *msg) {
   long line, col;
-  if (!st->collect_warnings) return;
+  if (st->on_warning == Qnil) return;
   fj_line_col(st, &line, &col);
-  rb_ary_push(st->warnings,
-              rb_funcall(cWarning, fj_new_id, 4, type_sym,
-                         rb_utf8_str_new_cstr(msg), LONG2NUM(line), LONG2NUM(col)));
+  rb_funcall(st->on_warning, fj_call_id, 1,
+             rb_funcall(cWarning, fj_new_id, 4, type_sym,
+                        rb_utf8_str_new_cstr(msg), LONG2NUM(line), LONG2NUM(col)));
 }
 
 /* 1-based column of the current byte position (bytes since the last line start).
@@ -1161,9 +1163,9 @@ static VALUE fj_build_object(fj_state *st, const VALUE *pairs, long count) {
   long  entries = count / 2, i;
   VALUE hash    = rb_hash_new_capa(entries);
 
-  /* Fast path: bulk insert. Skipped when collecting warnings, which needs the
-   * per-member loop below to report each dropped duplicate key. */
-  if (!st->symbolize_keys && !st->dup_first_wins && !st->collect_warnings) {
+  /* Fast path: bulk insert. Skipped when an on_warning handler is present, which needs
+   * the per-member loop below to report each dropped duplicate key. */
+  if (!st->symbolize_keys && !st->dup_first_wins && st->on_warning == Qnil) {
     rb_hash_bulk_insert(count, pairs, hash);
     if (st->dup_raise && fj_hash_len(hash) < entries) {
       VALUE seen = rb_hash_new_capa(entries);
@@ -1178,7 +1180,7 @@ static VALUE fj_build_object(fj_state *st, const VALUE *pairs, long count) {
 
   for (i = 0; i + 1 < count; i += 2) {
     VALUE k = st->symbolize_keys ? rb_funcall(pairs[i], fj_to_sym_id, 0) : pairs[i];
-    if (st->dup_first_wins || st->dup_raise || st->collect_warnings) {
+    if (st->dup_first_wins || st->dup_raise || st->on_warning != Qnil) {
       if (RTEST(rb_funcall(hash, fj_key_p_id, 1, k))) {
         if (st->dup_raise) fj_error(st, "duplicate key");
         fj_warn(st, fj_sym_duplicate_key, "duplicate key");
@@ -1271,7 +1273,7 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
       fj_skip_ws_comments(st);
       b = fj_byte(st);
       if (b == ',') { /* collapsing separator: skip empty member */
-        if (st->collect_warnings && !vss) fj_warn(st, fj_sym_empty_slot, "extra comma, collapsed an empty slot");
+        if (st->on_warning != Qnil && !vss) fj_warn(st, fj_sym_empty_slot, "extra comma, collapsed an empty slot");
         vss = 0;
         fj_advance(st, 1);
         continue;
@@ -1323,7 +1325,7 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
       fj_skip_ws_comments(st);
       b = fj_byte(st);
       if (b == ',') { /* collapsing separator: skip empty slot */
-        if (st->collect_warnings && !vss) fj_warn(st, fj_sym_empty_slot, "extra comma, collapsed an empty slot");
+        if (st->on_warning != Qnil && !vss) fj_warn(st, fj_sym_empty_slot, "extra comma, collapsed an empty slot");
         vss = 0;
         fj_advance(st, 1);
         continue;
@@ -1412,8 +1414,7 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
     else st.bigdecimal_load = 1; /* :auto (default), including nil */
   }
 
-  st.collect_warnings = RTEST(rb_hash_aref(opts, ID2SYM(rb_intern("warnings"))));
-  st.warnings = st.collect_warnings ? rb_ary_new() : Qnil;
+  st.on_warning = rb_hash_aref(opts, ID2SYM(rb_intern("on_warning"))); /* Qnil when absent */
 
   if (st.len >= 3 && (unsigned char)st.buf[0] == 0xEF &&
       (unsigned char)st.buf[1] == 0xBB && (unsigned char)st.buf[2] == 0xBF) {
@@ -1439,10 +1440,10 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
    * whitespace / newline / concatenation do), so a bracketless comma list still
    * raises in fj_parse_iter — the unsupported implicit-root array. */
   fj_skip_ws_comments(&st);
-  if (fj_eof(&st)) return st.collect_warnings ? rb_assoc_new(Qnil, st.warnings) : Qnil;
+  if (fj_eof(&st)) return Qnil;
   value = fj_parse_iter(&st, fj_implicit_root_ahead(&st));
   fj_skip_ws_comments(&st);
-  if (fj_eof(&st)) return st.collect_warnings ? rb_assoc_new(value, st.warnings) : value;
+  if (fj_eof(&st)) return value;
   {
     VALUE arr = rb_ary_new();
     rb_ary_push(arr, value);
@@ -1450,7 +1451,7 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
       rb_ary_push(arr, fj_parse_iter(&st, fj_implicit_root_ahead(&st)));
       fj_skip_ws_comments(&st);
     } while (!fj_eof(&st));
-    return st.collect_warnings ? rb_assoc_new(arr, st.warnings) : arr;
+    return arr;
   }
 }
 
@@ -1463,6 +1464,7 @@ void Init_smarter_json(void) {
   fj_to_sym_id = rb_intern("to_sym");
   fj_key_p_id = rb_intern("key?");
   fj_new_id = rb_intern("new");
+  fj_call_id = rb_intern("call");
   fj_sym_empty_slot = ID2SYM(rb_intern("empty_slot"));
   fj_sym_empty_value = ID2SYM(rb_intern("empty_value"));
   fj_sym_duplicate_key = ID2SYM(rb_intern("duplicate_key"));

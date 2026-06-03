@@ -24,6 +24,19 @@ RSpec.describe "fuzz / property tests" do
     :error
   end
 
+  # Like outcome, but with an on_warning: collector — captures [result, warning-type
+  # sequence]. (Compares warning *types*/order, not line/col, since dup-key positions
+  # legitimately differ between paths.) Also exercises the C per-member object-build
+  # path, which only runs when a handler is present.
+  def warned_outcome(input, acceleration)
+    types = []
+    result = SmarterJSON.process(input, acceleration: acceleration, bigdecimal_load: :float,
+                                        on_warning: ->(w) { types << w.type })
+    [:ok, result, types]
+  rescue SmarterJSON::ParseError
+    :error
+  end
+
   def random_string(rng)
     Array.new(rng.rand(0..8)) do
       cp = rng.rand(0x00..0x2fff)             # include control chars (force escaping) + multibyte
@@ -91,6 +104,26 @@ RSpec.describe "fuzz / property tests" do
       c = outcome(input, true)
       r = outcome(input, false)
       expect(c).to(eq(r), "C/Ruby divergence for #{input.inspect}\n C: #{c.inspect}\n Ruby: #{r.inspect}\n seed=#{seed}")
+    end
+  end
+
+  it "C and Ruby paths agree on warnings for mutated valid JSON (seed=#{seed})" do
+    rng = Random.new(seed + 4)
+    iter.times do
+      input = mutate(rng, JSON.generate(random_value(rng)))
+      c = warned_outcome(input, true)
+      r = warned_outcome(input, false)
+      expect(c).to(eq(r), "C/Ruby warnings divergence for #{input.inspect}\n C: #{c.inspect}\n Ruby: #{r.inspect}\n seed=#{seed}")
+    end
+  end
+
+  it "C and Ruby paths agree on warnings for random ASCII garbage (seed=#{seed})" do
+    rng = Random.new(seed + 5)
+    iter.times do
+      input = Array.new(rng.rand(0..40)) { rng.rand(0x20..0x7e) }.pack("C*").force_encoding("UTF-8")
+      c = warned_outcome(input, true)
+      r = warned_outcome(input, false)
+      expect(c).to(eq(r), "C/Ruby warnings divergence for #{input.inspect}\n C: #{c.inspect}\n Ruby: #{r.inspect}\n seed=#{seed}")
     end
   end
 
