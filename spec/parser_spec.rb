@@ -432,6 +432,11 @@ second"', acceleration: acceleration)).to eq("firstsecond")
               input = "    '''\r\n    a\r\n    b\r\n    '''"
               expect(SmarterJSON.process(input, acceleration: acceleration)).to eq("a\nb")
             end
+
+            it 'normalizes bare CR line endings to \\n inside the content' do
+              input = "    '''\r    a\r    b\r    '''"
+              expect(SmarterJSON.process(input, acceleration: acceleration)).to eq("a\nb")
+            end
           end
 
           it "raises on an unterminated triple-quoted string" do
@@ -657,6 +662,14 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
           it "accepts mixed line endings in one document" do
             expect(SmarterJSON.process("{\n  a: 1\r\n  b: 2\r  c: 3\n}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2, "c" => 3 })
+          end
+
+          it "accepts # comments across CR-only line endings" do
+            expect(SmarterJSON.process("a: 1\r# note\rb: 2", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+          end
+
+          it "accepts // comments across CR-only line endings" do
+            expect(SmarterJSON.process("a: 1\r// note\rb: 2", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
         end
 
@@ -915,6 +928,22 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect(rv).to be_nil
         end
 
+        it "process(IO) with a block handles mixed newline styles between documents" do
+          io = StringIO.new("\n{\"id\":1}\r\n\r{\"id\":2}\n\n{\"id\":3}\r")
+          out = []
+          rv = SmarterJSON.process(io, acceleration: acceleration) { |v| out << v }
+          expect(out).to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
+          expect(rv).to be_nil
+        end
+
+        it "process(IO) with a block skips comment-only records between documents" do
+          io = StringIO.new("{\"id\":1}\n# note\n\n// note\n{\"id\":2}\n")
+          out = []
+          rv = SmarterJSON.process(io, acceleration: acceleration) { |v| out << v }
+          expect(out).to eq([{ "id" => 1 }, { "id" => 2 }])
+          expect(rv).to be_nil
+        end
+
         it "process(IO) without a block returns the value or Array" do
           expect(SmarterJSON.process(StringIO.new('{"a":1}'), acceleration: acceleration)).to eq({ "a" => 1 })
           expect(SmarterJSON.process(StringIO.new(%({"a":1}\n{"b":2})), acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
@@ -924,6 +953,16 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect(SmarterJSON.process(StringIO.new("\n\n{\"a\":1}\n\n{\"b\":2}\n\n"), acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
           expect(SmarterJSON.process(StringIO.new("\r\n\r\n{\"a\":1}\r\n\r\n{\"b\":2}\r\n\r\n"), acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
           expect(SmarterJSON.process(StringIO.new("\r\r{\"a\":1}\r\r{\"b\":2}\r\r"), acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
+        end
+
+        it "process(IO) without a block handles mixed newline styles between documents" do
+          io = StringIO.new("\n{\"a\":1}\r\n\r{\"b\":2}\n\n{\"c\":3}\r")
+          expect(SmarterJSON.process(io, acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }, { "c" => 3 }])
+        end
+
+        it "process(IO) without a block skips comment-only records between documents" do
+          io = StringIO.new("{\"a\":1}\n# note\n\n// note\n{\"b\":2}\n")
+          expect(SmarterJSON.process(io, acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
         end
 
         it "process raises ArgumentError for neither a String nor an IO" do
@@ -937,8 +976,54 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect(rv).to be_nil
         end
 
+        it "process_file with a block handles LF / CRLF / CR blank lines around documents" do
+          ["\n\n{\"id\":1}\n\n{\"id\":2}\n\n", "\r\n\r\n{\"id\":1}\r\n\r\n{\"id\":2}\r\n\r\n", "\r\r{\"id\":1}\r\r{\"id\":2}\r\r"].each do |content|
+            out = []
+            Tempfile.create(["multi-doc", ".txt"]) do |f|
+              f.binmode
+              f.write(content)
+              f.flush
+              rv = SmarterJSON.process_file(f.path, acceleration: acceleration) { |v| out << v }
+              expect(rv).to be_nil
+            end
+            expect(out).to eq([{ "id" => 1 }, { "id" => 2 }])
+          end
+        end
+
+        it "process_file with a block handles mixed newline styles and comment-only records" do
+          out = []
+          Tempfile.create(["multi-doc-mixed", ".txt"]) do |f|
+            f.binmode
+            f.write("\n{\"id\":1}\r\n# note\r// note\n\n{\"id\":2}\r")
+            f.flush
+            rv = SmarterJSON.process_file(f.path, acceleration: acceleration) { |v| out << v }
+            expect(rv).to be_nil
+          end
+          expect(out).to eq([{ "id" => 1 }, { "id" => 2 }])
+        end
+
         it "process_file without a block returns an Array of the documents" do
           expect(SmarterJSON.process_file(File.join(fixtures_dir, "multi_doc.ndjson"), acceleration: acceleration)).to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
+        end
+
+        it "process_file without a block handles LF / CRLF / CR blank lines around documents" do
+          ["\n\n{\"a\":1}\n\n{\"b\":2}\n\n", "\r\n\r\n{\"a\":1}\r\n\r\n{\"b\":2}\r\n\r\n", "\r\r{\"a\":1}\r\r{\"b\":2}\r\r"].each do |content|
+            Tempfile.create(["multi-doc", ".txt"]) do |f|
+              f.binmode
+              f.write(content)
+              f.flush
+              expect(SmarterJSON.process_file(f.path, acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
+            end
+          end
+        end
+
+        it "process_file without a block handles mixed newline styles and comment-only records" do
+          Tempfile.create(["multi-doc-mixed", ".txt"]) do |f|
+            f.binmode
+            f.write("\n{\"a\":1}\r\n# note\r// note\n\n{\"b\":2}\r")
+            f.flush
+            expect(SmarterJSON.process_file(f.path, acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
+          end
         end
       end
 
@@ -976,6 +1061,16 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
         it "returns an Array of documents with leading, trailing, and repeated CR-only blank lines" do
           input = "\r\r{\"event\": 1}\r\r{\"event\": 2}\r\r"
+          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{ "event" => 1 }, { "event" => 2 }])
+        end
+
+        it "returns an Array of documents with mixed newline styles between documents" do
+          input = "\n{\"event\": 1}\r\n\r{\"event\": 2}\n\n{\"event\": 3}\r"
+          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{ "event" => 1 }, { "event" => 2 }, { "event" => 3 }])
+        end
+
+        it "returns an Array of documents with blank and comment-only separators between documents" do
+          input = "{\"event\": 1}\n# note\n\n// note\n{\"event\": 2}\n"
           expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{ "event" => 1 }, { "event" => 2 }])
         end
 

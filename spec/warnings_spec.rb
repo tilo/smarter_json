@@ -131,6 +131,33 @@ RSpec.describe "SmarterJSON.process on_warning:" do
           expect(w.line).to eq(1)
           expect(w.col).to eq(4) # the second comma in "[1,,2]"
         end
+
+        it "reports the exact line/col of a collapsed slot across CRLF" do
+          warns, handler = collect
+          SmarterJSON.process("[1,\r\n,2]", on_warning: handler, acceleration: acceleration)
+          w = warns.first
+          expect(w.type).to eq(:empty_slot)
+          expect(w.line).to eq(2)
+          expect(w.col).to eq(1)
+        end
+
+        it "reports the exact line/col of an empty value across CRLF" do
+          warns, handler = collect
+          SmarterJSON.process("{a:\r\n}", on_warning: handler, acceleration: acceleration)
+          w = warns.first
+          expect(w.type).to eq(:empty_value)
+          expect(w.line).to eq(2)
+          expect(w.col).to eq(1)
+        end
+
+        it "reports the duplicate-key warning on the duplicate line across CRLF" do
+          warns, handler = collect
+          SmarterJSON.process("{\"a\":1,\r\n\"a\":2}", on_warning: handler, acceleration: acceleration)
+          w = warns.first
+          expect(w.type).to eq(:duplicate_key)
+          expect(w.line).to eq(2)
+          expect(w.col).to be >= 1
+        end
       end
 
       describe "every path delivers warnings to the handler" do
