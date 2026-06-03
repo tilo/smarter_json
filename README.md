@@ -110,7 +110,7 @@ SmarterJSON.process(input, on_warning: ->(w) { Rails.logger.warn(w) })
 
 Benchmarks: p10 of 40 runs, Apple M1 Max, Ruby 3.4.7, on the standard JSON corpus (canada, citm_catalog, twitter, github_events, …). The apples-to-apples comparisons are **SmarterJSON/C** vs **Oj/strict** vs **stdlib `json`**, all producing `Float` (run `rake report` in `json_benchmarks/` for the full table — numbers vary run to run).
 
-- **vs Oj/strict** (the `JSON.parse`-equivalent mode, both producing `Float`): SmarterJSON/C is faster on nearly every file — typically **1.1–1.6×** (e.g. big_decimals ~1.6×, deeply-nested ~1.4×, citm / twitter / usgs ~1.3×, github / citylots / weather ~1.1–1.2×). The one exception is **string_array**, where Oj/strict's SIMD string scan is ~1.7× faster — that's the current frontier.
+- **vs Oj/strict** (the `JSON.parse`-equivalent mode, both producing `Float`): SmarterJSON/C is faster on nearly every file — typically **1.1–1.7×** (e.g. usgs ~1.7×, big_decimals ~1.6×, citm / deeply-nested ~1.4×, twitter / config ~1.3×, github / citylots / weather ~1.1–1.3×). **string_array** — long the one file where Oj's SIMD string scan pulled ahead — is now **roughly tied** (within a few percent of Oj/strict, Oj/compat, and stdlib `json`), since SmarterJSON's own NEON scanner closed that gap.
 - **vs stdlib `json` (C):** competitive with the fastest Ruby JSON library — it ties `json` on big_decimals and string_array, and trails by ~1.1–1.7× on the rest. (`canada.json` is the outlier, far behind — that's the `BigDecimal` default, see below.)
 - **Numbers:** floats are decoded with Ryū (correctly rounded, single-pass), so number-heavy data is fast and bit-exact.
 
