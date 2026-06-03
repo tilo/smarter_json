@@ -448,6 +448,32 @@ RSpec.describe "LLM-style input recovery" do
           expect(warns).to be_empty
         end
       end
+
+      # Real-world data (e.g. GitHub event payloads) carries markdown in its string
+      # values — ``` code fences and <json> mentions. Such input parses fine on the
+      # first try, so it must NOT be dragged through the pure-Ruby wrapper-recovery
+      # scan. Recovery is reactive: it runs only after a parse actually fails (or for
+      # a bare leading label like "JSON:" that parses-but-wrong).
+      describe "clean input keeps off the wrapper-recovery path" do
+        it "does not invoke wrapper recovery when ``` / <json> appear only inside string values" do
+          input = '{"commit":"see ``` fenced ``` and a <json> tag in the message"}'
+          expect(SmarterJSON::Recovery).not_to receive(:extract_payloads)
+          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq({ "commit" => "see ``` fenced ``` and a <json> tag in the message" })
+        end
+
+        it "does not invoke wrapper recovery for concatenated documents whose strings contain ```" do
+          input = %({"a":"```"}\n{"b":"<json>"})
+          expect(SmarterJSON::Recovery).not_to receive(:extract_payloads)
+          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{ "a" => "```" }, { "b" => "<json>" }])
+        end
+
+        it "still recovers a genuinely fenced payload through the parse-then-recover path" do
+          warns, handler = collect
+          input = "```json\n{\"a\":1}\n```\n"
+          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: handler)).to eq({ "a" => 1 })
+          expect(warns.map(&:type)).to eq([:code_fence_stripped])
+        end
+      end
     end
   end
 end

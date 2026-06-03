@@ -345,7 +345,18 @@ module SmarterJSON
     def process_string(input, options, &block)
       return SmarterJSON.send(:process_content, input, options, &block) unless input.valid_encoding?
 
-      if wrapper_hint?(input)
+      # Recovery is REACTIVE: parse first, and only fall back to wrapper extraction when
+      # the parse actually fails (the rescue below). Every wrapper shape — code fences,
+      # <json>/BEGIN_JSON tags, prose around the payload — makes the parse raise, so the
+      # rescue catches it. Crucially this keeps clean input on the single-parse fast path
+      # even when its string values legitimately contain ``` or <json> (real-world data
+      # like GitHub event payloads is full of markdown), instead of dragging hundreds of
+      # MB through the pure-Ruby candidate scan.
+      #
+      # The one exception is a bare leading label like "JSON: {...}", which parses
+      # successfully but WRONGLY (as an implicit-root object keyed by the label), so it
+      # must be intercepted before parsing.
+      if leading_label?(input)
         payloads = extract_payloads(input, options)
         return replay_payloads(payloads, options, &block) unless payloads.empty?
       end
@@ -360,10 +371,14 @@ module SmarterJSON
       raise
     end
 
-    # Caller (process_string) has already established the input is valid_encoding?,
-    # so we do not re-check it here.
-    def wrapper_hint?(input)
-      input.match?(/```|<json\b|BEGIN_JSON\b/i) || input.match?(/\A[[:space:]]*(?:JSON|Final answer)[[:space:]]*:/i)
+    # Whether the input opens with a bare "JSON:" / "Final answer:" label (which would
+    # otherwise parse, wrongly, as an implicit-root object keyed by the label). We use
+    # String#start_with? with a Regexp rather than match?(/\A.../): start_with? checks
+    # only the beginning, whereas a \A-anchored match? still retries at every byte
+    # position and so scans the WHOLE input (≈0.3s on a 200 MB document) on every parse.
+    # (Caller has already established the input is valid_encoding?.)
+    def leading_label?(input)
+      input.start_with?(/[[:space:]]*(?:JSON|Final answer)[[:space:]]*:/i)
     end
 
     def replay_payloads(payloads, options, &block)
