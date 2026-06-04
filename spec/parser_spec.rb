@@ -1400,7 +1400,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           end
         end
 
-        describe "bigdecimal_load (Oj-compatible; default :auto)" do
+        describe "decimal_precision (Oj-compatible; default :auto)" do
           it "loads a >16-significant-digit decimal as BigDecimal by default (:auto)" do
             expect(SmarterJSON.process("0.12345678901234567", acceleration: acceleration)).to eql(BigDecimal("0.12345678901234567"))
           end
@@ -1413,12 +1413,12 @@ second"', acceleration: acceleration)).to eq("firstsecond")
             expect(SmarterJSON.process("12345678901234567890", acceleration: acceleration)).to eql(12_345_678_901_234_567_890)
           end
 
-          it "forces Float with bigdecimal_load: :float even for high precision" do
-            expect(SmarterJSON.process("0.12345678901234567", bigdecimal_load: :float, acceleration: acceleration)).to be_a(Float)
+          it "forces Float with decimal_precision: :float even for high precision" do
+            expect(SmarterJSON.process("0.12345678901234567", decimal_precision: :float, acceleration: acceleration)).to be_a(Float)
           end
 
-          it "forces BigDecimal for any decimal with bigdecimal_load: :bigdecimal" do
-            expect(SmarterJSON.process("3.14", bigdecimal_load: :bigdecimal, acceleration: acceleration)).to eql(BigDecimal("3.14"))
+          it "forces BigDecimal for any decimal with decimal_precision: :bigdecimal" do
+            expect(SmarterJSON.process("3.14", decimal_precision: :bigdecimal, acceleration: acceleration)).to eql(BigDecimal("3.14"))
           end
 
           it "applies in array/member position too" do
@@ -1428,7 +1428,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           end
 
           it "normalizes a trailing-dot decimal under :bigdecimal" do
-            result = SmarterJSON.process("5.", bigdecimal_load: :bigdecimal, acceleration: acceleration)
+            result = SmarterJSON.process("5.", decimal_precision: :bigdecimal, acceleration: acceleration)
             expect(result).to be_a(BigDecimal)
             expect(result).to eq(BigDecimal("5"))
           end
@@ -1443,7 +1443,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
           it "matches String#to_f for a >17-significant-digit float (strtod fallback)" do
             s = "1.2345678901234567890" # 20 sig digits — beyond Ryū's 17-digit fast path
-            expect(SmarterJSON.process(s, bigdecimal_load: :float, acceleration: acceleration)).to eql(s.to_f)
+            expect(SmarterJSON.process(s, decimal_precision: :float, acceleration: acceleration)).to eql(s.to_f)
           end
 
           it "matches String#to_f for a subnormal-range float" do
@@ -1467,7 +1467,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
           it "matches String#to_f for a >17-digit float carrying underscores" do
             s = "1.234_567_890_123_456_789" # underscores + >17 digits — strip then strtod fallback
-            expect(SmarterJSON.process(s, bigdecimal_load: :float, acceleration: acceleration)).to eql(s.delete("_").to_f)
+            expect(SmarterJSON.process(s, decimal_precision: :float, acceleration: acceleration)).to eql(s.delete("_").to_f)
           end
         end
       end

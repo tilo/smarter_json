@@ -94,7 +94,7 @@ The default `:auto` keeps high-precision decimals as `BigDecimal` (matching Oj).
 
 ```ruby
 SmarterJSON.process("65.613616999999977")                        # => BigDecimal (:auto, the default)
-SmarterJSON.process("65.613616999999977", bigdecimal_load: :float)  # => 65.613616999999977 (a Float)
+SmarterJSON.process("65.613616999999977", decimal_precision: :float)  # => 65.613616999999977 (a Float)
 ```
 
 ### Example 9: Lenient Input: Comments, Trailing Commas, Unquoted Keys

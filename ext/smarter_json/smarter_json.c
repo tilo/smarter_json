@@ -48,7 +48,7 @@ static ID    fj_name_id;
 static VALUE fj_sym_encoding;
 static VALUE fj_sym_symbolize_keys;
 static VALUE fj_sym_first_wins;
-static VALUE fj_sym_bigdecimal_load;
+static VALUE fj_sym_decimal_precision;
 static VALUE fj_sym_float;
 static VALUE fj_sym_bigdecimal;
 static VALUE fj_sym_on_warning;
@@ -69,7 +69,7 @@ typedef struct {
   int depth;
   int symbolize_keys;
   int dup_first_wins;
-  int bigdecimal_load;  /* 0 = float, 1 = auto, 2 = bigdecimal */
+  int decimal_precision;  /* 0 = float, 1 = auto, 2 = bigdecimal */
   fj_kc_slot *kcache;   /* per-parse key cache (NULL when interning unavailable) */
   VALUE on_warning;     /* on_warning: callable invoked per non-fatal lenient fix, else Qnil */
 } fj_state;
@@ -588,8 +588,8 @@ static int fj_try_decimal(fj_state *st, const char *p, long n, VALUE *out) {
   e10 -= frac;
   /* :bigdecimal always; :auto only when significant digits > 16. m10digits is >=
    * the significant-digit count, so m10digits <= 16 skips the fj_sig_digits scan. */
-  if (st->bigdecimal_load == 2 ||
-      (st->bigdecimal_load == 1 && m10digits > 16 && fj_sig_digits(p, n) > 16)) {
+  if (st->decimal_precision == 2 ||
+      (st->decimal_precision == 1 && m10digits > 16 && fj_sig_digits(p, n) > 16)) {
     *out = fj_to_bigdecimal_token(p, n);
   } else {
     *out = fj_float_from_parts(m10, m10digits, e10, neg, overflow, p, n);
@@ -700,8 +700,8 @@ static VALUE fj_parse_number(fj_state *st) {
    * when significant digits > 16. Since m10digits >= significant digits, m10digits
    * <= 16 guarantees not-BigDecimal and lets us skip the fj_sig_digits scan
    * entirely (the common case — e.g. every coordinate in canada.json). */
-  if (st->bigdecimal_load == 2 ||
-      (st->bigdecimal_load == 1 && m10digits > 16 && fj_sig_digits(np, nlen) > 16)) {
+  if (st->decimal_precision == 2 ||
+      (st->decimal_precision == 1 && m10digits > 16 && fj_sig_digits(np, nlen) > 16)) {
     return fj_to_bigdecimal_token(np, nlen);
   }
   return fj_float_from_parts(m10, m10digits, e10, neg, overflow, np, nlen);
@@ -1106,8 +1106,8 @@ static int fj_try_member_number(fj_state *st, VALUE *out) {
     return 1;
   }
   e10 -= frac;
-  if (st->bigdecimal_load == 2 ||
-      (st->bigdecimal_load == 1 && m10digits > 16 && fj_sig_digits(np, nlen) > 16)) {
+  if (st->decimal_precision == 2 ||
+      (st->decimal_precision == 1 && m10digits > 16 && fj_sig_digits(np, nlen) > 16)) {
     *out = fj_to_bigdecimal_token(np, nlen);
   } else {
     *out = fj_float_from_parts(m10, m10digits, e10, neg, overflow, np, nlen);
@@ -1423,10 +1423,10 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
   st.dup_first_wins = (dk == fj_sym_first_wins);
 
   {
-    VALUE bd = rb_hash_aref(opts, fj_sym_bigdecimal_load);
-    if (bd == fj_sym_float) st.bigdecimal_load = 0;
-    else if (bd == fj_sym_bigdecimal) st.bigdecimal_load = 2;
-    else st.bigdecimal_load = 1; /* :auto (default), including nil */
+    VALUE bd = rb_hash_aref(opts, fj_sym_decimal_precision);
+    if (bd == fj_sym_float) st.decimal_precision = 0;
+    else if (bd == fj_sym_bigdecimal) st.decimal_precision = 2;
+    else st.decimal_precision = 1; /* :auto (default), including nil */
   }
 
   st.on_warning = rb_hash_aref(opts, fj_sym_on_warning); /* Qnil when absent */
@@ -1490,7 +1490,7 @@ void Init_smarter_json(void) {
   fj_sym_encoding = ID2SYM(rb_intern("encoding"));
   fj_sym_symbolize_keys = ID2SYM(rb_intern("symbolize_keys"));
   fj_sym_first_wins = ID2SYM(rb_intern("first_wins"));
-  fj_sym_bigdecimal_load = ID2SYM(rb_intern("bigdecimal_load"));
+  fj_sym_decimal_precision = ID2SYM(rb_intern("decimal_precision"));
   fj_sym_float = ID2SYM(rb_intern("float"));
   fj_sym_bigdecimal = ID2SYM(rb_intern("bigdecimal"));
   fj_sym_on_warning = ID2SYM(rb_intern("on_warning"));

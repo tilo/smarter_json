@@ -21,6 +21,7 @@ module SmarterJSON
   # For an IO this streams document-by-document in bounded memory — it reads the
   # stream as newline-delimited documents (NDJSON / JSONL), one per line.
   def process(input, options = {}, &block)
+    options = Options.process_options(options)
     if input.is_a?(String)
       Recovery.process_string(input, options, &block)
     elsif input.respond_to?(:read)
@@ -39,7 +40,8 @@ module SmarterJSON
   # loading the whole file); the documents are read as newline-delimited
   # (NDJSON / JSONL), one per line.
   def process_file(path, options = {}, &block)
-    encoding = options.fetch(:encoding, "UTF-8")
+    options = Options.process_options(options)
+    encoding = options[:encoding] || "UTF-8"
     if block
       File.open(path, "r:#{encoding}") { |io| stream_io(io, options, &block) }
     else
@@ -616,15 +618,8 @@ module SmarterJSON
     BLANK_HEAD  = /\A[[:space:]]+/.freeze
     BLANK_TAIL  = /[[:space:]]+\z/.freeze
 
-    # All caller-facing settings live in one options hash (smarter_csv style).
-    DEFAULT_OPTIONS = {
-      acceleration: true, # use the C extension when available
-      encoding: nil, # label the input's encoding (no transcoding)
-      symbolize_keys: false, # Symbol keys instead of String
-      duplicate_key: :last_wins, # :last_wins | :first_wins
-      bigdecimal_load: :auto, # :auto | :float | :bigdecimal (Oj-compatible)
-      on_warning: nil, # a callable invoked once per non-fatal lenient fix (a SmarterJSON::Warning)
-    }.freeze
+    # The defaults live centrally in SmarterJSON::Options (lib/smarter_json/options.rb).
+    DEFAULT_OPTIONS = Options::DEFAULT_OPTIONS
 
     def initialize(input, options = {})
       raise ArgumentError, "input must be a String" unless input.is_a?(String)
@@ -632,8 +627,8 @@ module SmarterJSON
       opts = DEFAULT_OPTIONS.merge(options)
       @symbolize_keys  = opts[:symbolize_keys]
       @duplicate_key   = opts[:duplicate_key]
-      @bigdecimal_load = opts[:bigdecimal_load]
-      @on_warning      = opts[:on_warning]
+      @decimal_precision = opts[:decimal_precision]
+      @on_warning = opts[:on_warning]
 
       encoding = opts[:encoding]
       @input = encoding ? input.dup.force_encoding(encoding) : input
@@ -729,7 +724,11 @@ module SmarterJSON
             at_top = false
             vss = false
           elsif b.nil?
+            # Defensive guard: parse / each_value check eof? before calling parse_iter,
+            # so `at_top` never meets end-of-input here. Kept to mirror the C driver.
+            # :nocov:
             raise error("unexpected end of input")
+            # :nocov:
           else
             return parse_value
           end
@@ -1150,11 +1149,11 @@ module SmarterJSON
       body.match?(/[.eE]/) ? decimal_value(body) : body.to_i
     end
 
-    # A decimal (has '.' or exponent). bigdecimal_load: :float -> Float,
+    # A decimal (has '.' or exponent). decimal_precision: :float -> Float,
     # :bigdecimal -> BigDecimal, :auto -> BigDecimal when the mantissa has more
     # than 16 significant digits (Oj's DEC_MAX threshold), else Float.
     def decimal_value(body)
-      case @bigdecimal_load
+      case @decimal_precision
       when :float      then body.to_f
       when :bigdecimal then to_big_decimal(body)
       else                  significant_digits(body) > 16 ? to_big_decimal(body) : body.to_f
@@ -1173,7 +1172,11 @@ module SmarterJSON
       body = normalize_for_bigdecimal(body) if NEEDS_DECIMAL_FIXUP.match?(body)
       BigDecimal(body)
     rescue ArgumentError
+      # Defensive: BigDecimal() does not reject a DEC_RE-validated, normalized token,
+      # so this fallback is unreachable from valid input. Kept as a safety net.
+      # :nocov:
       body.to_f
+      # :nocov:
     end
 
     # BigDecimal() rejects a bare leading/trailing dot (".5", "5.", "5.e3").

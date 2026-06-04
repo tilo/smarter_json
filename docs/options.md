@@ -17,17 +17,17 @@ These options are passed to [`SmarterJSON.process`](./basic_read_api.md) and `Sm
 
 | Option            | Default      | Explanation                                                                                                            |
 |-------------------|--------------|------------------------------------------------------------------------------------------------------------------------|
-| `:symbolize_keys` | `false`      | Return object keys as Symbols instead of Strings.                                                                      |
-| `:duplicate_key`  | `:last_wins` | How to handle a key that repeats within one object: `:last_wins` or `:first_wins`. (Every repeat is also reported through `:on_warning` — see below.)                          |
-| `:bigdecimal_load`| `:auto`      | `:auto` keeps high-precision decimals as `BigDecimal` (matches Oj); `:float` forces every number to `Float`; `:bigdecimal` forces every decimal to `BigDecimal`. |
 | `:acceleration`   | `true`       | Use the C extension when it is compiled and loadable; `false` forces the pure-Ruby implementation. Both produce identical results. |
+| `:decimal_precision`| `:auto`      | `:auto` keeps high-precision decimals as `BigDecimal` (matches Oj); `:float` forces every number to `Float`; `:bigdecimal` forces every decimal to `BigDecimal`. |
+| `:duplicate_key`  | `:last_wins` | How to handle a key that repeats within one object: `:last_wins` or `:first_wins`. (Every repeat is also reported through `:on_warning` — see below.)                          |
 | `:encoding`       | `nil`        | Labels the input's encoding (e.g. `"UTF-8"`). It does **not** trigger a transcoding pass — see below.                  |
 | `:on_warning`     | `nil`        | A callable invoked once per lenient fix applied, passed a `SmarterJSON::Warning`. Never changes the return value. See below. |
+| `:symbolize_keys` | `false`      | Return object keys as Symbols instead of Strings.                                                                      |
 
 ```ruby
 SmarterJSON.process('{"a": 1}', symbolize_keys: true)               # => {:a=>1}
 SmarterJSON.process('{"a":1,"a":2}', duplicate_key: :first_wins)    # => {"a"=>1}  (default keeps the 2)
-SmarterJSON.process(big_decimal_json, bigdecimal_load: :float)      # every number as Float (fastest)
+SmarterJSON.process(big_decimal_json, decimal_precision: :float)      # every number as Float (fastest)
 SmarterJSON.process("[1,,2]", on_warning: ->(w) { puts w })         # => [1, 2], and prints the warning
 ```
 
@@ -49,9 +49,9 @@ The warning types are `:empty_slot` (a collapsed empty comma slot, e.g. `[1,,2]`
 
 `:encoding` labels what the input *is* — it does not transcode. SmarterJSON works on the bytes in their native encoding and emits string values with the same encoding tag, the same way `smarter_csv` handles encodings. Bytes that are invalid for the claimed encoding raise `SmarterJSON::EncodingError` (a kind of `SmarterJSON::ParseError`). A UTF-8 BOM is handled automatically; UTF-16 / UTF-32 input is out of scope.
 
-### A note on `:bigdecimal_load`
+### A note on `:decimal_precision`
 
-The default `:auto` preserves high-precision numbers as `BigDecimal`, matching Oj's default. That is intrinsically slower than producing `Float` on number-heavy files (e.g. `canada.json`). For raw speed when you don't need the extra precision, pass `bigdecimal_load: :float`.
+The default `:auto` preserves high-precision numbers as `BigDecimal`, matching Oj's default. That is intrinsically slower than producing `Float` on number-heavy files (e.g. `canada.json`). For raw speed when you don't need the extra precision, pass `decimal_precision: :float`.
 
 ## Writing
 

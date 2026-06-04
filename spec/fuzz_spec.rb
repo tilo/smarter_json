@@ -19,7 +19,7 @@ RSpec.describe "fuzz / property tests" do
   # Parse on one path. Returns :error for a clean ParseError, or [:ok, value] otherwise.
   # Anything else (a crash, a hang, a non-ParseError exception) escapes and fails loudly.
   def outcome(input, acceleration)
-    [:ok, SmarterJSON.process(input, acceleration: acceleration, bigdecimal_load: :float)]
+    [:ok, SmarterJSON.process(input, acceleration: acceleration, decimal_precision: :float)]
   rescue SmarterJSON::ParseError
     :error
   end
@@ -30,7 +30,7 @@ RSpec.describe "fuzz / property tests" do
   # path, which only runs when a handler is present.
   def warned_outcome(input, acceleration)
     types = []
-    result = SmarterJSON.process(input, acceleration: acceleration, bigdecimal_load: :float,
+    result = SmarterJSON.process(input, acceleration: acceleration, decimal_precision: :float,
                                         on_warning: ->(w) { types << w.type })
     [:ok, result, types]
   rescue SmarterJSON::ParseError
@@ -81,7 +81,7 @@ RSpec.describe "fuzz / property tests" do
       json = JSON.generate(random_value(rng))
       ref  = JSON.parse(json)
       [true, false].each do |accel|
-        got = SmarterJSON.process(json, acceleration: accel, bigdecimal_load: :float)
+        got = SmarterJSON.process(json, acceleration: accel, decimal_precision: :float)
         expect(got).to(eq(ref), "mismatch (accel=#{accel}) for #{json.inspect}\n got: #{got.inspect}\n ref: #{ref.inspect}\n seed=#{seed}")
       end
     end
@@ -133,7 +133,7 @@ RSpec.describe "fuzz / property tests" do
       value = random_value(rng)
       json  = SmarterJSON.generate(value)
       [true, false].each do |accel|
-        got = SmarterJSON.process(json, acceleration: accel, bigdecimal_load: :float)
+        got = SmarterJSON.process(json, acceleration: accel, decimal_precision: :float)
         expect(got).to(eq(value), "round-trip failed (accel=#{accel}) for #{value.inspect}\n json: #{json.inspect}\n got: #{got.inspect}\n seed=#{seed}")
       end
     end
