@@ -4,7 +4,7 @@
 #ifdef __ARM_NEON
 #include <arm_neon.h>
 #endif
-#include "vendor/ryu.h" /* Ryū string->double, correctly rounded (Ulf Adams, Apache-2.0) */
+#include "vendor/eisel_lemire.h" /* Eisel-Lemire decimal->double, correctly rounded (fast_float) */
 
 /* Branch hints / prefetch on the hot scan loops. No-ops on compilers without the
  * builtins (the code is correct either way; these only steer code layout). */
@@ -12,10 +12,12 @@
 #  define FJ_LIKELY(x)   __builtin_expect(!!(x), 1)
 #  define FJ_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #  define FJ_PREFETCH(p) __builtin_prefetch(p)
+#  define FJ_ALWAYS_INLINE inline __attribute__((always_inline))
 #else
 #  define FJ_LIKELY(x)   (x)
 #  define FJ_UNLIKELY(x) (x)
 #  define FJ_PREFETCH(p) ((void)0)
+#  define FJ_ALWAYS_INLINE inline
 #endif
 
 /*
@@ -243,6 +245,18 @@ static void fj_skip_ws_comments(fj_state *st) {
     if (b == '/' && n == '*') fj_skip_block_comment(st);
     else fj_skip_to_eol(st);
   }
+}
+
+/* Cheap guard for the hot loop: could the current byte begin whitespace or a
+ * comment marker, so the (otherwise no-op) fj_skip_ws_comments call is actually
+ * needed? Compact data — the next byte is already a structural char or a value
+ * start — answers no, and we elide both the call and its memcpy/lookahead. ASCII
+ * whitespace, '#', '/', and possible multibyte-ws lead bytes (>=0x80) answer yes;
+ * EOF (-1) answers no (the caller's existing -1 checks handle it). Behaviour is
+ * identical to always calling fj_skip_ws_comments — this only skips a known no-op. */
+static inline int fj_needs_ws_skip(int b) {
+  if (b < 0) return 0;
+  return b == 0x20 || (b >= 0x09 && b <= 0x0D) || b == '#' || b == '/' || b >= 0x80;
 }
 
 /* forward declarations (mutual recursion) */
@@ -488,7 +502,7 @@ static VALUE fj_to_bigdecimal_token(const char *p, long n) {
  * (quoteless path) call these, so the Integer/Float a token produces is identical
  * no matter which path scanned it. [p, n) is the raw token slice (with any sign),
  * needed only by the bignum / strtod fallbacks. */
-static VALUE fj_int_from_parts(uint64_t m, int digits, int neg, int overflow, const char *p, long n) {
+static FJ_ALWAYS_INLINE VALUE fj_int_from_parts(uint64_t m, int digits, int neg, int overflow, const char *p, long n) {
   if (!overflow && digits >= 1 && digits <= 18) {
     int64_t v = (int64_t)m;
     return LL2NUM(neg ? -v : v);
@@ -498,16 +512,89 @@ static VALUE fj_int_from_parts(uint64_t m, int digits, int neg, int overflow, co
   return rb_str_to_inum(fj_strip_underscores(p, n), 10, 0);
 }
 
-/* e10 is the final base-10 exponent (already adjusted by the fraction length). */
-static VALUE fj_float_from_parts(uint64_t m10, int m10digits, int64_t e10, int neg, int overflow, const char *p, long n) {
-  /* Ryū fast path: <=17 mantissa digits and not in the subnormal range. */
-  if (!overflow && m10digits >= 1 && m10digits <= 17 && (long)m10digits + e10 >= -307) {
-    if (m10 == 0) return rb_float_new(neg ? -0.0 : 0.0);
-    return rb_float_new(ryu_s2d_from_parts(m10, m10digits, (int32_t)e10, neg != 0));
+/* Convert a >17-digit / subnormal float token to a double. A double resolves ~17
+ * significant decimals; the digits past that affect only the final round-to-nearest-
+ * even, which a single sticky marker ("was any dropped digit nonzero?") captures. So
+ * we keep FJ_FLOAT_ODD_DIGITS significant digits and, if more nonzero digits follow,
+ * force the last kept digit odd (round-to-odd). strtod's round-to-nearest of that
+ * shorter mantissa then equals round-to-nearest of the full value — but strtod grinds
+ * far fewer digits. The kept count is well above 2x double's ~16 significant decimals,
+ * which is what round-to-odd needs to be exact (verified bit-for-bit against
+ * JSON.parse on the high-precision corpus). The token is rebuilt into a NUL-terminated
+ * "<digits>e<exp>" buffer (passing the raw input slice would make rb_cstr_to_dbl treat
+ * the trailing delimiter as garbage and re-run strtod a second time). */
+#define FJ_FLOAT_ODD_DIGITS 40
+static VALUE fj_float_strtod(const char *p, long n) {
+  char    digits[FJ_FLOAT_ODD_DIGITS];
+  char    out[FJ_FLOAT_ODD_DIGITS + 40];
+  long    i = 0, ow = 0, kept = 0, point_pos = 0, lead_frac_zeros = 0;
+  int     neg = 0, after_point = 0, seen_sig = 0, sticky = 0, esign = 0;
+  int64_t expl_exp = 0, x;
+
+  if (i < n && (p[i] == '+' || p[i] == '-')) { neg = (p[i] == '-'); i++; }
+
+  for (; i < n; i++) {
+    char c = p[i];
+    if (c == '_') continue;
+    if (c == '.') { after_point = 1; continue; }
+    if (c == 'e' || c == 'E') { i++; break; }
+    if (!seen_sig && c == '0') { if (after_point) lead_frac_zeros++; continue; }
+    seen_sig = 1;
+    if (!after_point) point_pos++;
+    if (kept < FJ_FLOAT_ODD_DIGITS) digits[kept++] = c;
+    else if (c != '0') sticky = 1;
   }
-  /* Fallback for >17 digits / extreme or subnormal exponents. */
-  if (memchr(p, '_', (size_t)n) == NULL) return rb_float_new(rb_cstr_to_dbl(p, 0));
-  return rb_float_new(rb_str_to_dbl(fj_strip_underscores(p, n), 0));
+
+  if (i < n && (p[i] == '+' || p[i] == '-')) { esign = (p[i] == '-'); i++; }
+  for (; i < n; i++) {
+    char c = p[i];
+    if (c == '_') continue;
+    if (c < '0' || c > '9') break;
+    expl_exp = expl_exp * 10 + (c - '0');
+  }
+  if (esign) expl_exp = -expl_exp;
+
+  if (kept == 0) return rb_float_new(neg ? -0.0 : 0.0);
+
+  /* round-to-odd: a dropped nonzero tail forces the last kept digit odd. */
+  if (sticky && ((digits[kept - 1] - '0') % 2) == 0) digits[kept - 1]++;
+
+  x = expl_exp + point_pos - lead_frac_zeros - kept;
+  if (neg) out[ow++] = '-';
+  memcpy(out + ow, digits, (size_t)kept);
+  ow += kept;
+  /* Append "e<exp>" by hand. snprintf here showed up as BSD_vfprintf in profiling —
+     a full printf formatter per number is absurdly heavy for one integer. */
+  out[ow++] = 'e';
+  if (x < 0) { out[ow++] = '-'; x = -x; }
+  {
+    char ex[24];
+    int  en = 0;
+    if (x == 0) ex[en++] = '0';
+    else while (x > 0) { ex[en++] = (char)('0' + (int)(x % 10)); x /= 10; }
+    while (en > 0) out[ow++] = ex[--en];
+  }
+  out[ow] = '\0';
+  return rb_float_new(rb_cstr_to_dbl(out, 0));
+}
+
+/* e10 is the final base-10 exponent (already adjusted by the fraction length). */
+static FJ_ALWAYS_INLINE VALUE fj_float_from_parts(uint64_t m10, int m10digits, int64_t e10, int neg, int overflow, const char *p, long n) {
+  /* Fast paths, by mantissa width (our scanner accumulates m10 exactly up to 18
+     digits, flagging overflow beyond):
+       <=17 digits -> Ryū (this vendored Ryū s2d is correct only to 17; its single
+                      mulShift64 loses the round-to-even tie bits past that).
+       ==18 digits -> Eisel-Lemire, correctly-rounded with no fallback for any exact
+                      uint64 mantissa (Mushtak-Lemire). This pulls full-double-
+                      precision data (e.g. citylots coordinates, 18 sig digits) off
+                      the slow strtod fallback — the stdlib json gem still strtods it.
+     >18 digits / overflow / extreme exponent -> strtod (round-to-odd). */
+  if (!overflow && m10digits >= 1 && m10digits <= 18 && (long)m10digits + e10 >= -307) {
+    if (m10 == 0) return rb_float_new(neg ? -0.0 : 0.0);
+    return rb_float_new(fj_eisel_lemire_s2d(e10, m10, neg));
+  }
+  /* Fallback for >18 digits / extreme or subnormal exponents. */
+  return fj_float_strtod(p, n);
 }
 
 /* Scan an already-bounded quoteless token [p, p+n) exactly once: validate it as a
@@ -1272,8 +1359,8 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
     int  is_obj;
 
     if (ps->fhead == 0) { /* top level: parse exactly one value */
-      fj_skip_ws_comments(st);
       b = fj_byte(st);
+      if (FJ_UNLIKELY(fj_needs_ws_skip(b))) { fj_skip_ws_comments(st); b = fj_byte(st); }
       if (b == '{') { fj_advance(st, 1); fj_fpush(ps, ps->vhead, 1); vss = 0; continue; }
       if (b == '[') { fj_advance(st, 1); fj_fpush(ps, ps->vhead, 0); vss = 0; continue; }
       if (b == -1) fj_error(st, "unexpected end of input");
@@ -1286,8 +1373,8 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
 
     if (is_obj) {
       VALUE key;
-      fj_skip_ws_comments(st);
       b = fj_byte(st);
+      if (FJ_UNLIKELY(fj_needs_ws_skip(b))) { fj_skip_ws_comments(st); b = fj_byte(st); }
       if (b == ',') { /* collapsing separator: skip empty member */
         if (st->on_warning != Qnil && !vss) fj_warn(st, fj_sym_empty_slot, "extra comma, collapsed an empty slot");
         vss = 0;
@@ -1314,11 +1401,12 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
       }
       if (b == ']') fj_error(st, "unexpected ']' — expected a key or '}'");
       key = fj_parse_object_key(st);
-      fj_skip_ws_comments(st);
-      if (fj_byte(st) != ':') fj_error(st, "expected ':' after object key");
-      fj_advance(st, 1);
-      fj_skip_ws_comments(st);
       b = fj_byte(st);
+      if (FJ_UNLIKELY(fj_needs_ws_skip(b))) { fj_skip_ws_comments(st); b = fj_byte(st); }
+      if (b != ':') fj_error(st, "expected ':' after object key");
+      fj_advance(st, 1);
+      b = fj_byte(st);
+      if (FJ_UNLIKELY(fj_needs_ws_skip(b))) { fj_skip_ws_comments(st); b = fj_byte(st); }
       if (b == '{' || b == '[') {
         fj_vpush(ps, key);
         fj_advance(st, 1);
@@ -1338,8 +1426,8 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
       fj_vpush(ps, fj_parse_member_value(st));
       vss = 1;
     } else { /* array */
-      fj_skip_ws_comments(st);
       b = fj_byte(st);
+      if (FJ_UNLIKELY(fj_needs_ws_skip(b))) { fj_skip_ws_comments(st); b = fj_byte(st); }
       if (b == ',') { /* collapsing separator: skip empty slot */
         if (st->on_warning != Qnil && !vss) fj_warn(st, fj_sym_empty_slot, "extra comma, collapsed an empty slot");
         vss = 0;
@@ -1364,6 +1452,13 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
         fj_fpush(ps, ps->vhead, (b == '{'));
         vss = 0;
         continue;
+      }
+      /* PROTOTYPE strict hot path: inline the number attempt so a numeric element
+         skips fj_parse_member_value's re-read + switch. Falls through to the full
+         dispatch (quoteless / strings / literals) when it isn't a clean number. */
+      if (b == '-' || b == '+' || b == '.' || (b >= '0' && b <= '9')) {
+        VALUE num;
+        if (fj_try_member_number(st, &num)) { fj_vpush(ps, num); vss = 1; continue; }
       }
       fj_vpush(ps, fj_parse_member_value(st));
       vss = 1;

@@ -8,6 +8,33 @@ A lenient, fast JSON processor for Ruby. It extracts strict JSON, NDJSON, JSON5,
 
 ## Why SmarterJSON?
 
+**Are you tired of seeing errors like these?**
+
+```
+    ERROR running JSON.parse (stdlib) on deeply_nested.json: JSON::NestingError: nesting of 101 is too deep
+
+    ERROR running Oj.load (default) on config.json5: Oj::ParseError: unexpected character (after [0]) at line 5, column 6 [parse.c:931]
+
+    ERROR running Oj.load (strict, float) on config.json5: Oj::ParseError: unexpected character (after [0]) at line 5, column 6 [parse.c:931]
+
+    ERROR running Oj.load (compat) on config.json5: EncodingError: unexpected character (after [0]) at line 5, column 6 [parse.c:931] in '// JSON5 config sample — leni…
+
+    ERROR running JSON.parse (stdlib) on config.json5: JSON::ParserError: expected object key, got 'id:' at line 4 column 5
+
+    ERROR running Yajl::Parser (yajl-ruby) on config.json5: Yajl::ParseError: lexical error: invalid char in json text. this. */ [ // record 0 { id: 0, name: 'alpha-0', mask: 0 (…
+
+    ERROR running Oj.load (default) on github_events_100k.ndjson: Oj::ParseError: unexpected characters after the JSON document (after ) at line 2, column 1 [parse.c:870]
+
+    ERROR running Oj.load (strict, float) on github_events_100k.ndjson: Oj::ParseError: unexpected characters after the JSON document (after ) at line 2, column 1 [parse.c:870]
+
+    ERROR running Oj.load (compat) on github_events_100k.ndjson: EncodingError: unexpected characters after the JSON document (after ) at line 2, column 1 [parse.c:870] in '{"id":"…
+
+    ERROR running JSON.parse (stdlib) on github_events_100k.ndjson: JSON::ParserError: unexpected token at end of stream '{"id":"34816047161","type":"Dele' at line 1 column 1
+
+    ERROR running Yajl::Parser (yajl-ruby) on github_events_100k.ndjson: Yajl::ParseError: Found multiple JSON objects in the stream but no block or the on_parse_complete callback was
+  assigne…
+```
+
 Traditional JSON parsers reject anything that isn't perfectly strict JSON. SmarterJSON is built on the opposite principle: **you shouldn't have to care what flavor of JSON you were handed** and **you shouldn't lose the whole document because of formatting errors.** Give it strict JSON, NDJSON, JSON5, an HJSON-style config file, LLM-generated JSON, or a copy-pasted blob with comments and trailing commas — it just extracts the data from it. When it is lenient, `smarter_json` isn't dropping data that exists — it's just not raising an eyebrow at a suspicious gap (like an extra comma). A strict parser would refuse the whole document and recover nothing; `smarter_json` returns everything except the formatting error.
 
 > For an ingestion tool, "reject the whole document because of one stray comma" is the worst outcome: you throw away the 99% that's fine to avoid maybe-mishandling a gap that carries no data anyway.
@@ -108,16 +135,31 @@ SmarterJSON.process(input, on_warning: ->(w) { Rails.logger.warn(w) })
 
 ## Performance
 
-Benchmarks: p10 of 40 runs, Apple M1 Max, Ruby 3.4.7, on the standard JSON corpus (canada, citm_catalog, twitter, github_events, …). The apples-to-apples comparisons are **SmarterJSON/C** vs **Oj/strict** vs **stdlib `json`**, all producing `Float` (run `rake report` in `json_benchmarks/` for the full table — numbers vary run to run).
+Benchmarks: Apple M1 Max, Ruby 3.4.7, p10 of 40 runs, on the standard JSON corpus. Each cell is **SmarterJSON vs that parser** — "faster" means SmarterJSON wins (run `rake report` in `json_benchmarks/` for the full table; ratios vary run to run).
 
-- **vs Oj/strict** (the `JSON.parse`-equivalent mode, both producing `Float`): SmarterJSON/C is faster on nearly every file — typically **1.1–1.7×** (e.g. usgs ~1.7×, big_decimals ~1.6×, citm / deeply-nested ~1.4×, twitter / config ~1.3×, github / citylots / weather ~1.1–1.3×). **string_array** — long the one file where Oj's SIMD string scan pulled ahead — is now **roughly tied** (within a few percent of Oj/strict, Oj/compat, and stdlib `json`), since SmarterJSON's own NEON scanner closed that gap.
-- **vs stdlib `json` (C):** competitive with the fastest Ruby JSON library — it ties `json` on big_decimals and string_array, and trails by ~1.1–1.7× on the rest. (`canada.json` is the outlier, far behind — that's the `BigDecimal` default, see below.)
-- **Numbers:** floats are decoded with Ryū (correctly rounded, single-pass), so number-heavy data is fast and bit-exact.
+| File                      | vs Oj/strict    | vs `json`        | vs Yajl         |
+| ------------------------- | --------------- | ---------------- | --------------- |
+| big_decimals <sup>≠</sup> | **1.8× faster** | **1.1× faster**  | **1.3× faster** |
+| canada <sup>≠</sup>       | **6.4× faster** | 1.6× slower      | **1.8× faster** |
+| citm_catalog              | **1.6× faster** | 1.3× slower      | **4.8× faster** |
+| citylots <sup>≠</sup>     | **4.1× faster** | **2.2× faster**  | **2.5× faster** |
+| config.jsonc              | **1.3× faster** | 1.5× slower      | **3.9× faster** |
+| deeply_nested             | **1.9× faster** | n/a <sup>‡</sup> | **5.4× faster** |
+| github_events             | **1.2× faster** | ≈ tied           | **3.1× faster** |
+| string_array              | 1.6× slower     | **1.1× faster**  | **1.8× faster** |
+| twitter                   | **1.4× faster** | 1.3× slower      | **3.6× faster** |
+| usgs_earthquakes          | **1.2× faster** | 1.5× slower      | **3.7× faster** |
+| weather_berlin            | **1.7× faster** | ≈ tied           | **3.5× faster** |
+
+<sup>≠</sup> Measured in `decimal_precision: :float` (Float, like-for-like). SmarterJSON's **default** `:auto` keeps these high-precision decimals as `BigDecimal` (no precision loss, like Oj's default) — intrinsically slower than `Float`, so comparing the default to `Float`-only parsers would be apples-to-oranges. Against Oj's matching `BigDecimal` default, SmarterJSON is faster there too.
+<sup>‡</sup> **n/a** isn't a measurement gap — it's real default behavior: `json` **errors on these** by default (it raises on multi-document / NDJSON input without a block, and caps nesting at 100 levels). SmarterJSON has neither limit.
+
+In short: **faster than Oj/strict nearly everywhere, far faster than Yajl, ahead of stdlib `json` on high-precision floats (`citylots` ~2×) and string_array, level on github/weather, and behind only on the strict-grammar files** — the cost of the leniency `json` doesn't carry. (`string_array` vs Oj/strict is the one loss — Oj's string-cache fast path; we're level with Oj/compat and `json` there.) Floats are decoded with the **Eisel-Lemire** algorithm (fast_float), correctly rounded and **bit-for-bit identical to `JSON.parse`** — fast *and* exact, even on full-double-precision decimals.
 
 **Two notes on fair comparison:**
 
-- **NDJSON:** on multi-document files, **only SmarterJSON reads the input via plain `process`** — Oj and `json` raise without a block, so their cells are `N/A`. That `N/A` reflects real default behavior, not a measurement gap. Plain `process` collects every document into an Array at ~270 MB/s; the streaming block form runs faster (~440 MB/s) because it doesn't hold all documents in memory at once.
-- **High-precision decimals (e.g. `canada.json`):** SmarterJSON's default `:auto` mode preserves high-precision numbers as `BigDecimal` (matching Oj's default), which is intrinsically slower than `Float`. Against `Float`-producing parsers it looks slower on such files; pass `decimal_precision: :float` to compare like-for-like (it then runs much faster). Against the equivalent `BigDecimal`-producing Oj mode, SmarterJSON is faster.
+- **NDJSON:** on multi-document files, **only SmarterJSON reads the input via plain `process`** — Oj and `json` raise without a block (the `‡` above). Plain `process` collects every document into an Array at ~270 MB/s; the streaming block form runs faster (~440 MB/s) because it doesn't hold all documents in memory at once.
+- **High-precision decimals (the `≠` files):** by default these load as `BigDecimal` (full precision, like Oj's default), which is intrinsically slower than `Float`. Pass `decimal_precision: :float` for a like-for-like `Float` comparison — where SmarterJSON **beats stdlib `json`** (e.g. `citylots` ~2×). Against Oj's matching `BigDecimal` default, SmarterJSON is faster either way.
 
 
 ### Options
