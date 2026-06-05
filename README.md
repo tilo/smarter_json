@@ -35,7 +35,15 @@ A lenient, fast JSON processor for Ruby. It extracts strict JSON, NDJSON, JSON5,
   assigne…
 ```
 
-Traditional JSON parsers reject anything that isn't perfectly strict JSON. SmarterJSON is built on the opposite principle: **you shouldn't have to care what flavor of JSON you were handed** and **you shouldn't lose the whole document because of formatting errors.** Give it strict JSON, NDJSON, JSON5, an HJSON-style config file, LLM-generated JSON, or a copy-pasted blob with comments and trailing commas — it just extracts the data from it. When it is lenient, `smarter_json` isn't dropping data that exists — it's just not raising an eyebrow at a suspicious gap (like an extra comma). A strict parser would refuse the whole document and recover nothing; `smarter_json` returns everything except the formatting error.
+**Do you have no control of the input quality?**
+
+Traditional JSON parsers reject anything that isn't perfectly strict JSON. That means your code breaks on malformed data.
+
+SmarterJSON is built on the opposite principle: **you shouldn't have to care what flavor of JSON you were handed** and **you shouldn't lose the whole document because of formatting errors.**
+Give it strict JSON, NDJSON, JSON5, an HJSON-style config file, LLM-generated JSON, or a copy-pasted blob with comments and trailing commas — it just extracts the data from it.
+When it is lenient, `smarter_json` isn't dropping data that exists — it's just not raising an eyebrow at a suspicious gap (like an extra comma).
+
+A strict parser would refuse the whole document and recover nothing; `smarter_json` returns everything except the formatting error.
 
 > For an ingestion tool, "reject the whole document because of one stray comma" is the worst outcome: you throw away the 99% that's fine to avoid maybe-mishandling a gap that carries no data anyway.
 
