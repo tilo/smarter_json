@@ -137,6 +137,9 @@ SmarterJSON.process(input, on_warning: ->(w) { Rails.logger.warn(w) })
 
 Benchmarks: Apple M1 Max, Ruby 3.4.7, p10 of 40 runs, on the standard JSON corpus. Each cell is **SmarterJSON vs that parser** — "faster" means SmarterJSON wins (run `rake report` in `json_benchmarks/` for the full table; ratios vary run to run).
 
+**SmarterJSON is..**
+
+
 | File                      | vs Oj/strict    | vs `json`        | vs Yajl         |
 | ------------------------- | --------------- | ---------------- | --------------- |
 | big_decimals <sup>≠</sup> | **1.8× faster** | **1.1× faster**  | **1.3× faster** |
