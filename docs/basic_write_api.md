@@ -127,11 +127,11 @@ Note the difference from the default `format: :json`, where a top-level Array is
 
 ## Round-tripping
 
-`process` and `generate` are inverses:
+`process_one` reads one document back, `process` reads many (NDJSON) back into an `Array` — each is the inverse of the matching `generate`:
 
 ```ruby
 obj = { "a" => 1, "b" => [2, "three", nil, true] }
-SmarterJSON.process(SmarterJSON.generate(obj)) == obj                                  # => true
+SmarterJSON.process_one(SmarterJSON.generate(obj)) == obj                              # => true
 
 arr = [{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }]
 SmarterJSON.process(SmarterJSON.generate(arr, format: :ndjson)) == arr                 # => true

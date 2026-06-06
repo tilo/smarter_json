@@ -2,6 +2,7 @@
 
 require "smarter_json"
 require "stringio"
+require "tempfile"
 
 RSpec.describe SmarterJSON do
   # Parity harness: each example runs on the C path (acceleration: true) and the
@@ -18,122 +19,149 @@ RSpec.describe SmarterJSON do
       describe "strict JSON (Layer 1)" do
         describe "literals" do
           it "parses true" do
-            expect(SmarterJSON.process("true", acceleration: acceleration)).to eq(true)
+            expect(SmarterJSON.process("true", acceleration: acceleration)).to eq([true])
+            expect(SmarterJSON.process_one("true", acceleration: acceleration)).to eq(true)
           end
 
           it "parses false" do
-            expect(SmarterJSON.process("false", acceleration: acceleration)).to eq(false)
+            expect(SmarterJSON.process("false", acceleration: acceleration)).to eq([false])
+            expect(SmarterJSON.process_one("false", acceleration: acceleration)).to eq(false)
           end
 
           it "parses null as nil" do
-            expect(SmarterJSON.process("null", acceleration: acceleration)).to be_nil
+            expect(SmarterJSON.process("null", acceleration: acceleration)).to eq([nil])
+            expect(SmarterJSON.process_one("null", acceleration: acceleration)).to be_nil
           end
         end
 
         describe "numbers" do
           it "parses zero" do
-            expect(SmarterJSON.process("0", acceleration: acceleration)).to eq(0)
+            expect(SmarterJSON.process("0", acceleration: acceleration)).to eq([0])
+            expect(SmarterJSON.process_one("0", acceleration: acceleration)).to eq(0)
           end
 
           it "parses positive integer" do
-            expect(SmarterJSON.process("1234567890", acceleration: acceleration)).to eq(1_234_567_890)
+            expect(SmarterJSON.process("1234567890", acceleration: acceleration)).to eq([1_234_567_890])
+            expect(SmarterJSON.process_one("1234567890", acceleration: acceleration)).to eq(1_234_567_890)
           end
 
           it "parses negative integer" do
-            expect(SmarterJSON.process("-42", acceleration: acceleration)).to eq(-42)
+            expect(SmarterJSON.process("-42", acceleration: acceleration)).to eq([-42])
+            expect(SmarterJSON.process_one("-42", acceleration: acceleration)).to eq(-42)
           end
 
           it "parses float" do
-            expect(SmarterJSON.process("-9876.543210", acceleration: acceleration)).to eq(-9876.543210)
+            expect(SmarterJSON.process("-9876.543210", acceleration: acceleration)).to eq([-9876.543210])
+            expect(SmarterJSON.process_one("-9876.543210", acceleration: acceleration)).to eq(-9876.543210)
           end
 
           it "parses scientific notation (lower e, negative exponent)" do
-            expect(SmarterJSON.process("0.123456789e-12", acceleration: acceleration)).to eq(0.123456789e-12)
+            expect(SmarterJSON.process("0.123456789e-12", acceleration: acceleration)).to eq([0.123456789e-12])
+            expect(SmarterJSON.process_one("0.123456789e-12", acceleration: acceleration)).to eq(0.123456789e-12)
           end
 
           it "parses scientific notation (upper E, explicit +)" do
-            expect(SmarterJSON.process("1.234567890E+34", acceleration: acceleration)).to eq(1.234567890E+34)
+            expect(SmarterJSON.process("1.234567890E+34", acceleration: acceleration)).to eq([1.234567890E+34])
+            expect(SmarterJSON.process_one("1.234567890E+34", acceleration: acceleration)).to eq(1.234567890E+34)
           end
 
           it "returns Infinity for numeric overflow (tentative §7.2)" do
-            expect(SmarterJSON.process("1e500", acceleration: acceleration)).to eq(Float::INFINITY)
+            expect(SmarterJSON.process("1e500", acceleration: acceleration)).to eq([Float::INFINITY])
+            expect(SmarterJSON.process_one("1e500", acceleration: acceleration)).to eq(Float::INFINITY)
           end
         end
 
         describe "strings" do
           it "parses simple double-quoted string" do
-            expect(SmarterJSON.process('"hello"', acceleration: acceleration)).to eq("hello")
+            expect(SmarterJSON.process('"hello"', acceleration: acceleration)).to eq(["hello"])
+            expect(SmarterJSON.process_one('"hello"', acceleration: acceleration)).to eq("hello")
           end
 
           it "parses empty string" do
-            expect(SmarterJSON.process('""', acceleration: acceleration)).to eq("")
+            expect(SmarterJSON.process('""', acceleration: acceleration)).to eq([""])
+            expect(SmarterJSON.process_one('""', acceleration: acceleration)).to eq("")
           end
 
           it "parses string with escaped quote" do
-            expect(SmarterJSON.process('"\""', acceleration: acceleration)).to eq('"')
+            expect(SmarterJSON.process('"\""', acceleration: acceleration)).to eq(['"'])
+            expect(SmarterJSON.process_one('"\""', acceleration: acceleration)).to eq('"')
           end
 
           it "parses string with backslash escape" do
-            expect(SmarterJSON.process('"\\\\"', acceleration: acceleration)).to eq("\\")
+            expect(SmarterJSON.process('"\\\\"', acceleration: acceleration)).to eq(["\\"])
+            expect(SmarterJSON.process_one('"\\\\"', acceleration: acceleration)).to eq("\\")
           end
 
           it "parses string with control character escapes" do
-            expect(SmarterJSON.process('"\b\f\n\r\t"', acceleration: acceleration)).to eq("\b\f\n\r\t")
+            expect(SmarterJSON.process('"\b\f\n\r\t"', acceleration: acceleration)).to eq(["\b\f\n\r\t"])
+            expect(SmarterJSON.process_one('"\b\f\n\r\t"', acceleration: acceleration)).to eq("\b\f\n\r\t")
           end
 
           it "parses string with forward-slash escape" do
-            expect(SmarterJSON.process('"\/"', acceleration: acceleration)).to eq("/")
+            expect(SmarterJSON.process('"\/"', acceleration: acceleration)).to eq(["/"])
+            expect(SmarterJSON.process_one('"\/"', acceleration: acceleration)).to eq("/")
           end
 
           it 'parses BMP \\uXXXX escape' do
-            expect(SmarterJSON.process('"A"', acceleration: acceleration)).to eq("A")
+            expect(SmarterJSON.process('"A"', acceleration: acceleration)).to eq(["A"])
+            expect(SmarterJSON.process_one('"A"', acceleration: acceleration)).to eq("A")
           end
 
-          it 'parses surrogate pair \\uD83D\\uDE00 (😀)' do
-            expect(SmarterJSON.process('"😀"', acceleration: acceleration)).to eq("\u{1F600}")
+          it 'parses stand-in pair \\uD83D\\uDE00 (😀)' do
+            expect(SmarterJSON.process('"😀"', acceleration: acceleration)).to eq(["\u{1F600}"])
+            expect(SmarterJSON.process_one('"😀"', acceleration: acceleration)).to eq("\u{1F600}")
           end
         end
 
         describe "arrays" do
           it "parses empty array" do
-            expect(SmarterJSON.process("[]", acceleration: acceleration)).to eq([])
+            expect(SmarterJSON.process("[]", acceleration: acceleration)).to eq([[]])
+            expect(SmarterJSON.process_one("[]", acceleration: acceleration)).to eq([])
           end
 
           it "parses array of integers" do
-            expect(SmarterJSON.process("[1, 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
+            expect(SmarterJSON.process("[1, 2, 3]", acceleration: acceleration)).to eq([[1, 2, 3]])
+            expect(SmarterJSON.process_one("[1, 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
           end
 
           it "parses array of mixed types" do
-            expect(SmarterJSON.process('[1, "two", true, null]', acceleration: acceleration)).to eq([1, "two", true, nil])
+            expect(SmarterJSON.process('[1, "two", true, null]', acceleration: acceleration)).to eq([[1, "two", true, nil]])
+            expect(SmarterJSON.process_one('[1, "two", true, null]', acceleration: acceleration)).to eq([1, "two", true, nil])
           end
 
           it "parses nested array" do
-            expect(SmarterJSON.process("[[1, 2], [3, 4]]", acceleration: acceleration)).to eq([[1, 2], [3, 4]])
+            expect(SmarterJSON.process("[[1, 2], [3, 4]]", acceleration: acceleration)).to eq([[[1, 2], [3, 4]]])
+            expect(SmarterJSON.process_one("[[1, 2], [3, 4]]", acceleration: acceleration)).to eq([[1, 2], [3, 4]])
           end
         end
 
         describe "objects" do
           it "parses empty object" do
-            expect(SmarterJSON.process("{}", acceleration: acceleration)).to eq({})
+            expect(SmarterJSON.process("{}", acceleration: acceleration)).to eq([{}])
+            expect(SmarterJSON.process_one("{}", acceleration: acceleration)).to eq({})
           end
 
           it "parses single-key object" do
-            expect(SmarterJSON.process('{"a": 1}', acceleration: acceleration)).to eq({ "a" => 1 })
+            expect(SmarterJSON.process('{"a": 1}', acceleration: acceleration)).to eq([{ "a" => 1 }])
+            expect(SmarterJSON.process_one('{"a": 1}', acceleration: acceleration)).to eq({ "a" => 1 })
           end
 
           it "parses multi-key object" do
-            expect(SmarterJSON.process('{"a": 1, "b": 2}', acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(SmarterJSON.process('{"a": 1, "b": 2}', acceleration: acceleration)).to eq([{ "a" => 1, "b" => 2 }])
+            expect(SmarterJSON.process_one('{"a": 1, "b": 2}', acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
 
           it "parses nested object" do
-            expect(SmarterJSON.process('{"outer": {"inner": 42}}', acceleration: acceleration)).to eq({ "outer" => { "inner" => 42 } })
+            expect(SmarterJSON.process('{"outer": {"inner": 42}}', acceleration: acceleration)).to eq([{ "outer" => { "inner" => 42 } }])
+            expect(SmarterJSON.process_one('{"outer": {"inner": 42}}', acceleration: acceleration)).to eq({ "outer" => { "inner" => 42 } })
           end
         end
 
         describe "comprehensive fixture" do
           it "parses json_pass1.json end-to-end" do
             input = File.read(File.join(fixtures_dir, "json_pass1.json"))
-            result = SmarterJSON.process(input, acceleration: acceleration)
+            result = SmarterJSON.process_one(input, acceleration: acceleration)
+            expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([result])
             expect(result).to be_a(Array)
             expect(result[0]).to eq("JSON Test Pattern pass1")
             expect(result[1]).to eq({ "object with 1 member" => ["array with 1 element"] })
@@ -158,109 +186,132 @@ RSpec.describe SmarterJSON do
       describe "JSON5 additions (Layer 2)" do
         describe "// line comments" do
           it "accepts a line comment before a value" do
-            expect(SmarterJSON.process("// a comment\n42", acceleration: acceleration)).to eq(42)
+            expect(SmarterJSON.process("// a comment\n42", acceleration: acceleration)).to eq([42])
+            expect(SmarterJSON.process_one("// a comment\n42", acceleration: acceleration)).to eq(42)
           end
 
           it "accepts a line comment between object members" do
-            expect(SmarterJSON.process('{"a": 1, // mid-line comment' + "\n" + '"b": 2}', acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(SmarterJSON.process('{"a": 1, // mid-line comment' + "\n" + '"b": 2}', acceleration: acceleration)).to eq([{ "a" => 1, "b" => 2 }])
+            expect(SmarterJSON.process_one('{"a": 1, // mid-line comment' + "\n" + '"b": 2}', acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
         end
 
         describe "/* */ block comments" do
           it "accepts a block comment before a value" do
-            expect(SmarterJSON.process("/* block comment */ 42", acceleration: acceleration)).to eq(42)
+            expect(SmarterJSON.process("/* block comment */ 42", acceleration: acceleration)).to eq([42])
+            expect(SmarterJSON.process_one("/* block comment */ 42", acceleration: acceleration)).to eq(42)
           end
 
           it "accepts a block comment inside an array" do
-            expect(SmarterJSON.process("[1, /* mid */ 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
+            expect(SmarterJSON.process("[1, /* mid */ 2, 3]", acceleration: acceleration)).to eq([[1, 2, 3]])
+            expect(SmarterJSON.process_one("[1, /* mid */ 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
           end
 
           it "accepts a multi-line block comment" do
-            expect(SmarterJSON.process("/*\nmulti\nline\n*/ 42", acceleration: acceleration)).to eq(42)
+            expect(SmarterJSON.process("/*\nmulti\nline\n*/ 42", acceleration: acceleration)).to eq([42])
+            expect(SmarterJSON.process_one("/*\nmulti\nline\n*/ 42", acceleration: acceleration)).to eq(42)
           end
         end
 
         describe "trailing comma" do
           it "accepts trailing comma in array" do
-            expect(SmarterJSON.process("[1, 2, 3,]", acceleration: acceleration)).to eq([1, 2, 3])
+            expect(SmarterJSON.process("[1, 2, 3,]", acceleration: acceleration)).to eq([[1, 2, 3]])
+            expect(SmarterJSON.process_one("[1, 2, 3,]", acceleration: acceleration)).to eq([1, 2, 3])
           end
 
           it "accepts trailing comma in object" do
-            expect(SmarterJSON.process('{"a": 1, "b": 2,}', acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(SmarterJSON.process('{"a": 1, "b": 2,}', acceleration: acceleration)).to eq([{ "a" => 1, "b" => 2 }])
+            expect(SmarterJSON.process_one('{"a": 1, "b": 2,}', acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
         end
 
         describe "unquoted keys (ECMAScript identifier names)" do
           it "accepts simple identifier key" do
-            expect(SmarterJSON.process("{foo: 1}", acceleration: acceleration)).to eq({ "foo" => 1 })
+            expect(SmarterJSON.process("{foo: 1}", acceleration: acceleration)).to eq([{ "foo" => 1 }])
+            expect(SmarterJSON.process_one("{foo: 1}", acceleration: acceleration)).to eq({ "foo" => 1 })
           end
 
           it "accepts identifier with underscore prefix" do
-            expect(SmarterJSON.process("{_bar: 2}", acceleration: acceleration)).to eq({ "_bar" => 2 })
+            expect(SmarterJSON.process("{_bar: 2}", acceleration: acceleration)).to eq([{ "_bar" => 2 }])
+            expect(SmarterJSON.process_one("{_bar: 2}", acceleration: acceleration)).to eq({ "_bar" => 2 })
           end
 
           it "accepts identifier with dollar sign" do
-            expect(SmarterJSON.process("{$baz: 3}", acceleration: acceleration)).to eq({ "$baz" => 3 })
+            expect(SmarterJSON.process("{$baz: 3}", acceleration: acceleration)).to eq([{ "$baz" => 3 }])
+            expect(SmarterJSON.process_one("{$baz: 3}", acceleration: acceleration)).to eq({ "$baz" => 3 })
           end
 
           it "accepts identifier with digits after first char" do
-            expect(SmarterJSON.process("{a1b2: 1}", acceleration: acceleration)).to eq({ "a1b2" => 1 })
+            expect(SmarterJSON.process("{a1b2: 1}", acceleration: acceleration)).to eq([{ "a1b2" => 1 }])
+            expect(SmarterJSON.process_one("{a1b2: 1}", acceleration: acceleration)).to eq({ "a1b2" => 1 })
           end
         end
 
         describe "single-quoted strings" do
           it "parses single-quoted string value" do
-            expect(SmarterJSON.process("{a: 'bar'}", acceleration: acceleration)).to eq({ "a" => "bar" })
+            expect(SmarterJSON.process("{a: 'bar'}", acceleration: acceleration)).to eq([{ "a" => "bar" }])
+            expect(SmarterJSON.process_one("{a: 'bar'}", acceleration: acceleration)).to eq({ "a" => "bar" })
           end
 
           it "parses single-quoted string with escaped single quote" do
-            expect(SmarterJSON.process("'it\\'s'", acceleration: acceleration)).to eq("it's")
+            expect(SmarterJSON.process("'it\\'s'", acceleration: acceleration)).to eq(["it's"])
+            expect(SmarterJSON.process_one("'it\\'s'", acceleration: acceleration)).to eq("it's")
           end
         end
 
         describe "hex numbers" do
           it "parses 0xFF as 255" do
-            expect(SmarterJSON.process("0xFF", acceleration: acceleration)).to eq(255)
+            expect(SmarterJSON.process("0xFF", acceleration: acceleration)).to eq([255])
+            expect(SmarterJSON.process_one("0xFF", acceleration: acceleration)).to eq(255)
           end
 
           it "parses negative hex number" do
-            expect(SmarterJSON.process("-0x10", acceleration: acceleration)).to eq(-16)
+            expect(SmarterJSON.process("-0x10", acceleration: acceleration)).to eq([-16])
+            expect(SmarterJSON.process_one("-0x10", acceleration: acceleration)).to eq(-16)
           end
         end
 
         describe "leading/trailing decimal points" do
           it "parses .5 as 0.5" do
-            expect(SmarterJSON.process(".5", acceleration: acceleration)).to eq(0.5)
+            expect(SmarterJSON.process(".5", acceleration: acceleration)).to eq([0.5])
+            expect(SmarterJSON.process_one(".5", acceleration: acceleration)).to eq(0.5)
           end
 
           it "parses 5. as 5.0" do
-            expect(SmarterJSON.process("5.", acceleration: acceleration)).to eq(5.0)
+            expect(SmarterJSON.process("5.", acceleration: acceleration)).to eq([5.0])
+            expect(SmarterJSON.process_one("5.", acceleration: acceleration)).to eq(5.0)
           end
         end
 
         describe "Infinity and NaN" do
           it "parses Infinity" do
-            expect(SmarterJSON.process("Infinity", acceleration: acceleration)).to eq(Float::INFINITY)
+            expect(SmarterJSON.process("Infinity", acceleration: acceleration)).to eq([Float::INFINITY])
+            expect(SmarterJSON.process_one("Infinity", acceleration: acceleration)).to eq(Float::INFINITY)
           end
 
           it "parses -Infinity" do
-            expect(SmarterJSON.process("-Infinity", acceleration: acceleration)).to eq(-Float::INFINITY)
+            expect(SmarterJSON.process("-Infinity", acceleration: acceleration)).to eq([-Float::INFINITY])
+            expect(SmarterJSON.process_one("-Infinity", acceleration: acceleration)).to eq(-Float::INFINITY)
           end
 
           it "parses NaN" do
-            expect(SmarterJSON.process("NaN", acceleration: acceleration)).to be_a(Float).and(be_nan)
+            expect(SmarterJSON.process("NaN", acceleration: acceleration).first).to be_a(Float).and(be_nan)
+            expect(SmarterJSON.process_one("NaN", acceleration: acceleration)).to be_a(Float).and(be_nan)
           end
         end
 
         describe "explicit + sign on numbers" do
           it "parses +5 as 5" do
-            expect(SmarterJSON.process("+5", acceleration: acceleration)).to eq(5)
+            expect(SmarterJSON.process("+5", acceleration: acceleration)).to eq([5])
+            expect(SmarterJSON.process_one("+5", acceleration: acceleration)).to eq(5)
           end
         end
 
         describe 'multi-line strings via \\-continuation' do
           it "joins lines via backslash continuation" do
             expect(SmarterJSON.process('"first\
+second"', acceleration: acceleration)).to eq(["firstsecond"])
+            expect(SmarterJSON.process_one('"first\
 second"', acceleration: acceleration)).to eq("firstsecond")
           end
         end
@@ -280,7 +331,8 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 }
 ```
 "
-          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq({"foo" => 1, "bar" => "baz"})
+          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{"foo" => 1, "bar" => "baz"}])
+          expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({"foo" => 1, "bar" => "baz"})
         end
 
         it "parses JSON with pervasive LLM-style comments and explanations" do
@@ -292,19 +344,26 @@ second"', acceleration: acceleration)).to eq("firstsecond")
               "baz": true /* always true */
             }
           JSON
-          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq({"foo"=>123, "bar"=>"baz", "baz"=>true})
+          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{"foo"=>123, "bar"=>"baz", "baz"=>true}])
+          expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({"foo"=>123, "bar"=>"baz", "baz"=>true})
         end
 
         it "accepts JSON objects/arrays abruptly truncated (returns prefix or raises cleanly)" do
           # Partial object (closed)
-          expect(SmarterJSON.process('{"a":1, "b":2}', acceleration: acceleration)).to eq({"a"=>1, "b"=>2})
+          expect(SmarterJSON.process('{"a":1, "b":2}', acceleration: acceleration)).to eq([{"a"=>1, "b"=>2}])
+          expect(SmarterJSON.process_one('{"a":1, "b":2}', acceleration: acceleration)).to eq({"a"=>1, "b"=>2})
           # Partial object (truncated after key)
           expect { SmarterJSON.process('{"a":1, ', acceleration: acceleration) }
             .to raise_error(SmarterJSON::ParseError, /end of input|unterminated/i)
+          expect { SmarterJSON.process_one('{"a":1, ', acceleration: acceleration) }
+            .to raise_error(SmarterJSON::ParseError, /end of input|unterminated/i)
           # Partial array (closed)
-          expect(SmarterJSON.process('[1, 2, 3]', acceleration: acceleration)).to eq([1, 2, 3])
+          expect(SmarterJSON.process('[1, 2, 3]', acceleration: acceleration)).to eq([[1, 2, 3]])
+          expect(SmarterJSON.process_one('[1, 2, 3]', acceleration: acceleration)).to eq([1, 2, 3])
           # Truncated array (no closing ]): warns or raises
           expect { SmarterJSON.process('[1, 2, ', acceleration: acceleration) }
+            .to raise_error(SmarterJSON::ParseError, /end of input|unterminated/i)
+          expect { SmarterJSON.process_one('[1, 2, ', acceleration: acceleration) }
             .to raise_error(SmarterJSON::ParseError, /end of input|unterminated/i)
         end
 
@@ -320,7 +379,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
               trace: "Done" // ok
             }
           JSON
-          result = SmarterJSON.process(input, acceleration: acceleration)
+          result = SmarterJSON.process_one(input, acceleration: acceleration)
           expect(result).to include("foo"=>nil, "bar"=>true, "baz"=>false, "val"=>nil)
           expect(result["extra"]).to be_a(Float).and satisfy(&:nan?)
           expect(result["note"]).to eq(Float::INFINITY)
@@ -330,248 +389,307 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       describe "HJSON-inspired additions (Layer 3)" do
         describe "# line comments" do
           it "accepts # comment before a value" do
-            expect(SmarterJSON.process("# comment\n42", acceleration: acceleration)).to eq(42)
+            expect(SmarterJSON.process("# comment\n42", acceleration: acceleration)).to eq([42])
+            expect(SmarterJSON.process_one("# comment\n42", acceleration: acceleration)).to eq(42)
           end
 
           it "accepts # comment between object members" do
-            expect(SmarterJSON.process("{a: 1 # comment\nb: 2}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(SmarterJSON.process("{a: 1 # comment\nb: 2}", acceleration: acceleration)).to eq([{ "a" => 1, "b" => 2 }])
+            expect(SmarterJSON.process_one("{a: 1 # comment\nb: 2}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
         end
 
         describe "comment-marker whitespace rule" do
           it "preserves URL with // (no whitespace before //)" do
-            expect(SmarterJSON.process("url: http://example.com", acceleration: acceleration)).to eq({ "url" => "http://example.com" })
+            expect(SmarterJSON.process("url: http://example.com", acceleration: acceleration)).to eq([{ "url" => "http://example.com" }])
+            expect(SmarterJSON.process_one("url: http://example.com", acceleration: acceleration)).to eq({ "url" => "http://example.com" })
           end
 
           it "preserves identifier with mid-token #" do
-            expect(SmarterJSON.process("method: Klass#meth", acceleration: acceleration)).to eq({ "method" => "Klass#meth" })
+            expect(SmarterJSON.process("method: Klass#meth", acceleration: acceleration)).to eq([{ "method" => "Klass#meth" }])
+            expect(SmarterJSON.process_one("method: Klass#meth", acceleration: acceleration)).to eq({ "method" => "Klass#meth" })
           end
 
           it "preserves email with mid-token #" do
-            expect(SmarterJSON.process("email: foo@bar#example.com", acceleration: acceleration)).to eq({ "email" => "foo@bar#example.com" })
+            expect(SmarterJSON.process("email: foo@bar#example.com", acceleration: acceleration)).to eq([{ "email" => "foo@bar#example.com" }])
+            expect(SmarterJSON.process_one("email: foo@bar#example.com", acceleration: acceleration)).to eq({ "email" => "foo@bar#example.com" })
           end
 
           it "treats # after whitespace as a comment" do
-            expect(SmarterJSON.process("name: Tilo # this is a comment", acceleration: acceleration)).to eq({ "name" => "Tilo" })
+            expect(SmarterJSON.process("name: Tilo # this is a comment", acceleration: acceleration)).to eq([{ "name" => "Tilo" }])
+            expect(SmarterJSON.process_one("name: Tilo # this is a comment", acceleration: acceleration)).to eq({ "name" => "Tilo" })
           end
 
           it "treats // after whitespace as a comment" do
-            expect(SmarterJSON.process("name: Tilo // this is a comment", acceleration: acceleration)).to eq({ "name" => "Tilo" })
+            expect(SmarterJSON.process("name: Tilo // this is a comment", acceleration: acceleration)).to eq([{ "name" => "Tilo" }])
+            expect(SmarterJSON.process_one("name: Tilo // this is a comment", acceleration: acceleration)).to eq({ "name" => "Tilo" })
           end
 
           it "treats # at start of line as a comment" do
-            expect(SmarterJSON.process("# top-level comment\nname: Tilo", acceleration: acceleration)).to eq({ "name" => "Tilo" })
+            expect(SmarterJSON.process("# top-level comment\nname: Tilo", acceleration: acceleration)).to eq([{ "name" => "Tilo" }])
+            expect(SmarterJSON.process_one("# top-level comment\nname: Tilo", acceleration: acceleration)).to eq({ "name" => "Tilo" })
           end
 
           it "preserves URL with full URL + trailing comment" do
-            expect(SmarterJSON.process("url: http://example.com/ # see this site", acceleration: acceleration)).to eq({ "url" => "http://example.com/" })
+            expect(SmarterJSON.process("url: http://example.com/ # see this site", acceleration: acceleration)).to eq([{ "url" => "http://example.com/" }])
+            expect(SmarterJSON.process_one("url: http://example.com/ # see this site", acceleration: acceleration)).to eq({ "url" => "http://example.com/" })
           end
 
           it "keeps /* as part of the token when not preceded by whitespace" do
-            expect(SmarterJSON.process("path: a/*b/c", acceleration: acceleration)).to eq({ "path" => "a/*b/c" })
+            expect(SmarterJSON.process("path: a/*b/c", acceleration: acceleration)).to eq([{ "path" => "a/*b/c" }])
+            expect(SmarterJSON.process_one("path: a/*b/c", acceleration: acceleration)).to eq({ "path" => "a/*b/c" })
           end
 
           it "treats /* after whitespace as a block comment" do
-            expect(SmarterJSON.process("name: Tilo /* a comment */", acceleration: acceleration)).to eq({ "name" => "Tilo" })
+            expect(SmarterJSON.process("name: Tilo /* a comment */", acceleration: acceleration)).to eq([{ "name" => "Tilo" }])
+            expect(SmarterJSON.process_one("name: Tilo /* a comment */", acceleration: acceleration)).to eq({ "name" => "Tilo" })
           end
         end
 
         describe "triple-quoted multi-line strings" do
           it "parses single-line triple-quoted string" do
-            expect(SmarterJSON.process("'''hello'''", acceleration: acceleration)).to eq("hello")
+            expect(SmarterJSON.process("'''hello'''", acceleration: acceleration)).to eq(["hello"])
+            expect(SmarterJSON.process_one("'''hello'''", acceleration: acceleration)).to eq("hello")
           end
 
           it "parses an empty triple-quoted string" do
-            expect(SmarterJSON.process("''''''", acceleration: acceleration)).to eq("")
+            expect(SmarterJSON.process("''''''", acceleration: acceleration)).to eq([""])
+            expect(SmarterJSON.process_one("''''''", acceleration: acceleration)).to eq("")
           end
 
           it "parses multi-line content at column 0 (no stripping)" do
-            expect(SmarterJSON.process("'''first\nsecond'''", acceleration: acceleration)).to eq("first\nsecond")
+            expect(SmarterJSON.process("'''first\nsecond'''", acceleration: acceleration)).to eq(["first\nsecond"])
+            expect(SmarterJSON.process_one("'''first\nsecond'''", acceleration: acceleration)).to eq("first\nsecond")
           end
 
           it "does not process escapes — backslashes and quotes are literal" do
-            expect(SmarterJSON.process("'''a \\ b \"q\" c'''", acceleration: acceleration)).to eq('a \\ b "q" c')
+            expect(SmarterJSON.process("'''a \\ b \"q\" c'''", acceleration: acceleration)).to eq(['a \\ b "q" c'])
+            expect(SmarterJSON.process_one("'''a \\ b \"q\" c'''", acceleration: acceleration)).to eq('a \\ b "q" c')
           end
 
           describe "indentation stripping (based on opening ''' marker column)" do
             it "marker alone on its line: strips structural indent, preserves surplus" do
               # opening ''' at column 4; content at 8/10/8 → keeps 4/6/4
               input = "    '''\n        first line\n          indented line\n        last line\n    '''"
-              expect(SmarterJSON.process(input, acceleration: acceleration)).to eq("    first line\n      indented line\n    last line")
+              expect(SmarterJSON.process(input, acceleration: acceleration)).to eq(["    first line\n      indented line\n    last line"])
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq("    first line\n      indented line\n    last line")
             end
 
             it "strips exactly to the marker column when content aligns with it" do
               # opening ''' at column 4; content also at 4 → fully stripped
               input = "    '''\n    first line\n      indented line\n    last line\n    '''"
-              expect(SmarterJSON.process(input, acceleration: acceleration)).to eq("first line\n  indented line\nlast line")
+              expect(SmarterJSON.process(input, acceleration: acceleration)).to eq(["first line\n  indented line\nlast line"])
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq("first line\n  indented line\nlast line")
             end
 
             it "text on the opening line is taken verbatim, later lines stripped" do
               input = "    '''first line\n      indented line\n    last line'''"
-              expect(SmarterJSON.process(input, acceleration: acceleration)).to eq("first line\n  indented line\nlast line")
+              expect(SmarterJSON.process(input, acceleration: acceleration)).to eq(["first line\n  indented line\nlast line"])
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq("first line\n  indented line\nlast line")
             end
 
             it "preserves a genuine blank line and the resulting trailing newline" do
               input = "    '''\n    first line\n    last line\n\n    '''"
-              expect(SmarterJSON.process(input, acceleration: acceleration)).to eq("first line\nlast line\n")
+              expect(SmarterJSON.process(input, acceleration: acceleration)).to eq(["first line\nlast line\n"])
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq("first line\nlast line\n")
             end
 
             it "never strips into the text when a line has less indent than the marker" do
               # opening ''' at column 4; a content line has only 2 leading spaces
               input = "    '''\n  short\n        deep\n    '''"
-              expect(SmarterJSON.process(input, acceleration: acceleration)).to eq("short\n    deep")
+              expect(SmarterJSON.process(input, acceleration: acceleration)).to eq(["short\n    deep"])
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq("short\n    deep")
             end
 
             it 'normalizes CRLF line endings to \\n inside the content' do
               input = "    '''\r\n    a\r\n    b\r\n    '''"
-              expect(SmarterJSON.process(input, acceleration: acceleration)).to eq("a\nb")
+              expect(SmarterJSON.process(input, acceleration: acceleration)).to eq(["a\nb"])
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq("a\nb")
             end
 
             it 'normalizes bare CR line endings to \\n inside the content' do
               input = "    '''\r    a\r    b\r    '''"
-              expect(SmarterJSON.process(input, acceleration: acceleration)).to eq("a\nb")
+              expect(SmarterJSON.process(input, acceleration: acceleration)).to eq(["a\nb"])
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq("a\nb")
             end
           end
 
           it "raises on an unterminated triple-quoted string" do
             expect { SmarterJSON.process("'''never closed", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated/)
+            expect { SmarterJSON.process_one("'''never closed", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated/)
           end
         end
 
         describe "quoteless single-line strings" do
           it "parses simple quoteless string value" do
-            expect(SmarterJSON.process("name: Tilo", acceleration: acceleration)).to eq({ "name" => "Tilo" })
+            expect(SmarterJSON.process("name: Tilo", acceleration: acceleration)).to eq([{ "name" => "Tilo" }])
+            expect(SmarterJSON.process_one("name: Tilo", acceleration: acceleration)).to eq({ "name" => "Tilo" })
           end
 
           it "trims surrounding whitespace from quoteless string" do
-            expect(SmarterJSON.process("text:    hello world   ", acceleration: acceleration)).to eq({ "text" => "hello world" })
+            expect(SmarterJSON.process("text:    hello world   ", acceleration: acceleration)).to eq([{ "text" => "hello world" }])
+            expect(SmarterJSON.process_one("text:    hello world   ", acceleration: acceleration)).to eq({ "text" => "hello world" })
           end
 
           it "treats backslashes inside quoteless strings as literal (no escape processing)" do
-            expect(SmarterJSON.process('text: a \ is just a \\', acceleration: acceleration).values.first).to eq('a \\ is just a \\')
+            expect(SmarterJSON.process('text: a \ is just a \\', acceleration: acceleration).first.values.first).to eq('a \\ is just a \\')
+            expect(SmarterJSON.process_one('text: a \ is just a \\', acceleration: acceleration).values.first).to eq('a \\ is just a \\')
           end
 
           it 'treats \\n inside a quoteless string as two literal characters' do
             # Ruby single-quoted source: the input is the 4 chars  a \ n b
-            expect(SmarterJSON.process('x: a\nb', acceleration: acceleration)).to eq({ "x" => 'a\nb' })
+            expect(SmarterJSON.process('x: a\nb', acceleration: acceleration)).to eq([{ "x" => 'a\nb' }])
+            expect(SmarterJSON.process_one('x: a\nb', acceleration: acceleration)).to eq({ "x" => 'a\nb' })
           end
 
           it "terminates a quoteless value at }" do
-            expect(SmarterJSON.process("{a: hello world}", acceleration: acceleration)).to eq({ "a" => "hello world" })
+            expect(SmarterJSON.process("{a: hello world}", acceleration: acceleration)).to eq([{ "a" => "hello world" }])
+            expect(SmarterJSON.process_one("{a: hello world}", acceleration: acceleration)).to eq({ "a" => "hello world" })
           end
 
           it "terminates a quoteless value at ]" do
-            expect(SmarterJSON.process("[hello world]", acceleration: acceleration)).to eq(["hello world"])
+            expect(SmarterJSON.process("[hello world]", acceleration: acceleration)).to eq([["hello world"]])
+            expect(SmarterJSON.process_one("[hello world]", acceleration: acceleration)).to eq(["hello world"])
           end
 
           it "treats a malformed number as a quoteless string (1.2.3)" do
-            expect(SmarterJSON.process("{version: 1.2.3}", acceleration: acceleration)).to eq({ "version" => "1.2.3" })
+            expect(SmarterJSON.process("{version: 1.2.3}", acceleration: acceleration)).to eq([{ "version" => "1.2.3" }])
+            expect(SmarterJSON.process_one("{version: 1.2.3}", acceleration: acceleration)).to eq({ "version" => "1.2.3" })
           end
 
           it "treats a digit-led non-number token as a quoteless string (12abc)" do
-            expect(SmarterJSON.process("{v: 12abc}", acceleration: acceleration)).to eq({ "v" => "12abc" })
+            expect(SmarterJSON.process("{v: 12abc}", acceleration: acceleration)).to eq([{ "v" => "12abc" }])
+            expect(SmarterJSON.process_one("{v: 12abc}", acceleration: acceleration)).to eq({ "v" => "12abc" })
           end
         end
 
         describe "leading-zero numbers fall through to quoteless strings" do
           it 'parses 0080 as the string "0080"' do
-            expect(SmarterJSON.process("port: 0080", acceleration: acceleration)).to eq({ "port" => "0080" })
+            expect(SmarterJSON.process("port: 0080", acceleration: acceleration)).to eq([{ "port" => "0080" }])
+            expect(SmarterJSON.process_one("port: 0080", acceleration: acceleration)).to eq({ "port" => "0080" })
           end
 
           it 'parses 00 as the string "00"' do
-            expect(SmarterJSON.process("n: 00", acceleration: acceleration)).to eq({ "n" => "00" })
+            expect(SmarterJSON.process("n: 00", acceleration: acceleration)).to eq([{ "n" => "00" }])
+            expect(SmarterJSON.process_one("n: 00", acceleration: acceleration)).to eq({ "n" => "00" })
           end
 
           it 'parses 02 as the string "02"' do
-            expect(SmarterJSON.process("n: 02", acceleration: acceleration)).to eq({ "n" => "02" })
+            expect(SmarterJSON.process("n: 02", acceleration: acceleration)).to eq([{ "n" => "02" }])
+            expect(SmarterJSON.process_one("n: 02", acceleration: acceleration)).to eq({ "n" => "02" })
           end
         end
 
         describe "implicit root object" do
           it "parses key: value at top level without outer {}" do
-            expect(SmarterJSON.process("host: localhost\nport: 5432", acceleration: acceleration)).to eq({ "host" => "localhost", "port" => 5432 })
+            expect(SmarterJSON.process("host: localhost\nport: 5432", acceleration: acceleration)).to eq([{ "host" => "localhost", "port" => 5432 }])
+            expect(SmarterJSON.process_one("host: localhost\nport: 5432", acceleration: acceleration)).to eq({ "host" => "localhost", "port" => 5432 })
           end
 
           it "parses nested object under implicit root" do
             input = "database:\n{\n  host: 127.0.0.1\n  port: 555\n}"
-            expect(SmarterJSON.process(input, acceleration: acceleration)).to eq({ "database" => { "host" => "127.0.0.1", "port" => 555 } })
+            expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{ "database" => { "host" => "127.0.0.1", "port" => 555 } }])
+            expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "database" => { "host" => "127.0.0.1", "port" => 555 } })
           end
         end
 
         describe "newline as separator" do
           it "separates object members on newlines without commas" do
-            expect(SmarterJSON.process("{\n  a: 1\n  b: 2\n}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(SmarterJSON.process("{\n  a: 1\n  b: 2\n}", acceleration: acceleration)).to eq([{ "a" => 1, "b" => 2 }])
+            expect(SmarterJSON.process_one("{\n  a: 1\n  b: 2\n}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
 
           it "separates array elements on newlines without commas" do
-            expect(SmarterJSON.process("[\n  1\n  2\n  3\n]", acceleration: acceleration)).to eq([1, 2, 3])
+            expect(SmarterJSON.process("[\n  1\n  2\n  3\n]", acceleration: acceleration)).to eq([[1, 2, 3]])
+            expect(SmarterJSON.process_one("[\n  1\n  2\n  3\n]", acceleration: acceleration)).to eq([1, 2, 3])
           end
         end
 
         describe "broader unquoted keys" do
           it "accepts {_var3: 1}" do
-            expect(SmarterJSON.process("{_var3: 1}", acceleration: acceleration)).to eq({ "_var3" => 1 })
+            expect(SmarterJSON.process("{_var3: 1}", acceleration: acceleration)).to eq([{ "_var3" => 1 }])
+            expect(SmarterJSON.process_one("{_var3: 1}", acceleration: acceleration)).to eq({ "_var3" => 1 })
           end
 
           it "accepts {my-key: 1}" do
-            expect(SmarterJSON.process("{my-key: 1}", acceleration: acceleration)).to eq({ "my-key" => 1 })
+            expect(SmarterJSON.process("{my-key: 1}", acceleration: acceleration)).to eq([{ "my-key" => 1 }])
+            expect(SmarterJSON.process_one("{my-key: 1}", acceleration: acceleration)).to eq({ "my-key" => 1 })
           end
 
           it "accepts {user-id-42: 1}" do
-            expect(SmarterJSON.process("{user-id-42: 1}", acceleration: acceleration)).to eq({ "user-id-42" => 1 })
+            expect(SmarterJSON.process("{user-id-42: 1}", acceleration: acceleration)).to eq([{ "user-id-42" => 1 }])
+            expect(SmarterJSON.process_one("{user-id-42: 1}", acceleration: acceleration)).to eq({ "user-id-42" => 1 })
           end
 
           it "rejects key starting with a digit (123-foo)" do
             expect { SmarterJSON.process("{123-foo: 1}", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+            expect { SmarterJSON.process_one("{123-foo: 1}", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
           end
         end
 
         describe "recognized literals win in quoteless context" do
           it "parses [1, 2, 3] as three integers" do
-            expect(SmarterJSON.process("[1, 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
+            expect(SmarterJSON.process("[1, 2, 3]", acceleration: acceleration)).to eq([[1, 2, 3]])
+            expect(SmarterJSON.process_one("[1, 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
           end
 
           it 'parses [1 2 3] as the single string "1 2 3"' do
-            expect(SmarterJSON.process("[1 2 3]", acceleration: acceleration)).to eq(["1 2 3"])
+            expect(SmarterJSON.process("[1 2 3]", acceleration: acceleration)).to eq([["1 2 3"]])
+            expect(SmarterJSON.process_one("[1 2 3]", acceleration: acceleration)).to eq(["1 2 3"])
           end
 
           # Boundary cases for the container-number fast path: a number commits
           # only when it abuts a value terminator; anything else falls back to the
           # quoteless scanner, which must still produce the identical result.
           it "commits numbers that abut a delimiter (comma/bracket/brace/newline)" do
-            expect(SmarterJSON.process("[1,2,3]", acceleration: acceleration)).to eq([1, 2, 3])
-            expect(SmarterJSON.process('{"a":1,"b":2.5}', acceleration: acceleration)).to eq("a" => 1, "b" => 2.5)
-            expect(SmarterJSON.process("[1.5e3,-7]", acceleration: acceleration)).to eq([1500.0, -7])
-            expect(SmarterJSON.process("[\n1\n,\n2\n]", acceleration: acceleration)).to eq([1, 2])
+            expect(SmarterJSON.process("[1,2,3]", acceleration: acceleration)).to eq([[1, 2, 3]])
+            expect(SmarterJSON.process_one("[1,2,3]", acceleration: acceleration)).to eq([1, 2, 3])
+            expect(SmarterJSON.process('{"a":1,"b":2.5}', acceleration: acceleration)).to eq([{ "a" => 1, "b" => 2.5 }])
+            expect(SmarterJSON.process_one('{"a":1,"b":2.5}', acceleration: acceleration)).to eq("a" => 1, "b" => 2.5)
+            expect(SmarterJSON.process("[1.5e3,-7]", acceleration: acceleration)).to eq([[1500.0, -7]])
+            expect(SmarterJSON.process_one("[1.5e3,-7]", acceleration: acceleration)).to eq([1500.0, -7])
+            expect(SmarterJSON.process("[\n1\n,\n2\n]", acceleration: acceleration)).to eq([[1, 2]])
+            expect(SmarterJSON.process_one("[\n1\n,\n2\n]", acceleration: acceleration)).to eq([1, 2])
           end
 
           it "still parses numbers correctly when whitespace separates them from the delimiter" do
-            expect(SmarterJSON.process("[1 , 2]", acceleration: acceleration)).to eq([1, 2])
-            expect(SmarterJSON.process("[3 ]", acceleration: acceleration)).to eq([3])
-            expect(SmarterJSON.process('{"a": 1 }', acceleration: acceleration)).to eq("a" => 1)
+            expect(SmarterJSON.process("[1 , 2]", acceleration: acceleration)).to eq([[1, 2]])
+            expect(SmarterJSON.process_one("[1 , 2]", acceleration: acceleration)).to eq([1, 2])
+            expect(SmarterJSON.process("[3 ]", acceleration: acceleration)).to eq([[3]])
+            expect(SmarterJSON.process_one("[3 ]", acceleration: acceleration)).to eq([3])
+            expect(SmarterJSON.process('{"a": 1 }', acceleration: acceleration)).to eq([{ "a" => 1 }])
+            expect(SmarterJSON.process_one('{"a": 1 }', acceleration: acceleration)).to eq("a" => 1)
           end
 
           it "falls back to string/hex/Infinity for digit-led non-plain-numbers in containers" do
-            expect(SmarterJSON.process("[0xFF]", acceleration: acceleration)).to eq([255])
-            expect(SmarterJSON.process("[-Infinity, 12]", acceleration: acceleration)).to eq([-Float::INFINITY, 12])
-            expect(SmarterJSON.process("[1.2.3]", acceleration: acceleration)).to eq(["1.2.3"])
-            expect(SmarterJSON.process("[1_000, 2_000]", acceleration: acceleration)).to eq([1000, 2000])
+            expect(SmarterJSON.process("[0xFF]", acceleration: acceleration)).to eq([[255]])
+            expect(SmarterJSON.process_one("[0xFF]", acceleration: acceleration)).to eq([255])
+            expect(SmarterJSON.process("[-Infinity, 12]", acceleration: acceleration)).to eq([[-Float::INFINITY, 12]])
+            expect(SmarterJSON.process_one("[-Infinity, 12]", acceleration: acceleration)).to eq([-Float::INFINITY, 12])
+            expect(SmarterJSON.process("[1.2.3]", acceleration: acceleration)).to eq([["1.2.3"]])
+            expect(SmarterJSON.process_one("[1.2.3]", acceleration: acceleration)).to eq(["1.2.3"])
+            expect(SmarterJSON.process("[1_000, 2_000]", acceleration: acceleration)).to eq([[1000, 2000]])
+            expect(SmarterJSON.process_one("[1_000, 2_000]", acceleration: acceleration)).to eq([1000, 2000])
           end
 
           it "parses [red green blue] as a single-element array with one string" do
-            expect(SmarterJSON.process("[red green blue]", acceleration: acceleration)).to eq(["red green blue"])
+            expect(SmarterJSON.process("[red green blue]", acceleration: acceleration)).to eq([["red green blue"]])
+            expect(SmarterJSON.process_one("[red green blue]", acceleration: acceleration)).to eq(["red green blue"])
           end
 
           it "parses [red, green, blue] as three strings" do
-            expect(SmarterJSON.process("[red, green, blue]", acceleration: acceleration)).to eq(%w[red green blue])
+            expect(SmarterJSON.process("[red, green, blue]", acceleration: acceleration)).to eq([%w[red green blue]])
+            expect(SmarterJSON.process_one("[red, green, blue]", acceleration: acceleration)).to eq(%w[red green blue])
           end
 
           it "parses [true, false, null] as three literals" do
-            expect(SmarterJSON.process("[true, false, null]", acceleration: acceleration)).to eq([true, false, nil])
+            expect(SmarterJSON.process("[true, false, null]", acceleration: acceleration)).to eq([[true, false, nil]])
+            expect(SmarterJSON.process_one("[true, false, null]", acceleration: acceleration)).to eq([true, false, nil])
           end
 
           it 'parses [true false] as the string "true false"' do
-            expect(SmarterJSON.process("[true false]", acceleration: acceleration)).to eq(["true false"])
+            expect(SmarterJSON.process("[true false]", acceleration: acceleration)).to eq([["true false"]])
+            expect(SmarterJSON.process_one("[true false]", acceleration: acceleration)).to eq(["true false"])
           end
         end
       end
@@ -584,7 +702,8 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         describe "UTF-8 BOM" do
           it "strips UTF-8 BOM at start of input" do
             input = "\xEF\xBB\xBF{\"a\":1}".b.force_encoding("UTF-8")
-            expect(SmarterJSON.process(input, acceleration: acceleration)).to eq({ "a" => 1 })
+            expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{ "a" => 1 }])
+            expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "a" => 1 })
           end
         end
 
@@ -592,84 +711,102 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           it "accepts curly double quotes as regular double quotes" do
             # U+201C LEFT DOUBLE QUOTATION MARK, U+201D RIGHT DOUBLE QUOTATION MARK
             input = "{\"a\": \u201Chello\u201D}"
-            expect(SmarterJSON.process(input, acceleration: acceleration)).to eq({ "a" => "hello" })
+            expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{ "a" => "hello" }])
+            expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "a" => "hello" })
           end
 
           it "accepts curly single quotes as regular single quotes" do
             # U+2018 LEFT SINGLE QUOTATION MARK, U+2019 RIGHT SINGLE QUOTATION MARK
             input = "{a: \u2018hello\u2019}"
-            expect(SmarterJSON.process(input, acceleration: acceleration)).to eq({ "a" => "hello" })
+            expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{ "a" => "hello" }])
+            expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "a" => "hello" })
           end
         end
 
         describe "Python literals" do
           it "parses True as true" do
-            expect(SmarterJSON.process("True", acceleration: acceleration)).to eq(true)
+            expect(SmarterJSON.process("True", acceleration: acceleration)).to eq([true])
+            expect(SmarterJSON.process_one("True", acceleration: acceleration)).to eq(true)
           end
 
           it "parses False as false" do
-            expect(SmarterJSON.process("False", acceleration: acceleration)).to eq(false)
+            expect(SmarterJSON.process("False", acceleration: acceleration)).to eq([false])
+            expect(SmarterJSON.process_one("False", acceleration: acceleration)).to eq(false)
           end
 
           it "parses None as nil" do
-            expect(SmarterJSON.process("None", acceleration: acceleration)).to be_nil
+            expect(SmarterJSON.process("None", acceleration: acceleration)).to eq([nil])
+            expect(SmarterJSON.process_one("None", acceleration: acceleration)).to be_nil
           end
         end
 
         describe "JavaScript undefined" do
           it "parses undefined as nil" do
-            expect(SmarterJSON.process("undefined", acceleration: acceleration)).to be_nil
+            expect(SmarterJSON.process("undefined", acceleration: acceleration)).to eq([nil])
+            expect(SmarterJSON.process_one("undefined", acceleration: acceleration)).to be_nil
           end
 
           it "parses undefined as a value (object value, array element) as nil" do
-            expect(SmarterJSON.process('{"a": undefined}', acceleration: acceleration)).to eq({ "a" => nil })
-            expect(SmarterJSON.process("[undefined]", acceleration: acceleration)).to eq([nil])
+            expect(SmarterJSON.process('{"a": undefined}', acceleration: acceleration)).to eq([{ "a" => nil }])
+            expect(SmarterJSON.process_one('{"a": undefined}', acceleration: acceleration)).to eq({ "a" => nil })
+            expect(SmarterJSON.process("[undefined]", acceleration: acceleration)).to eq([[nil]])
+            expect(SmarterJSON.process_one("[undefined]", acceleration: acceleration)).to eq([nil])
           end
 
           # As a *key*, undefined is the string "undefined" — object keys are always
           # strings, and recognized-literal-wins does not apply in key position.
           # (Resolves the design-doc §7.3 open question.)
           it "parses undefined as an object key as the string \"undefined\"" do
-            expect(SmarterJSON.process("{undefined: 1}", acceleration: acceleration)).to eq({ "undefined" => 1 })
-            expect(SmarterJSON.process('{"undefined": 1}', acceleration: acceleration)).to eq({ "undefined" => 1 })
+            expect(SmarterJSON.process("{undefined: 1}", acceleration: acceleration)).to eq([{ "undefined" => 1 }])
+            expect(SmarterJSON.process_one("{undefined: 1}", acceleration: acceleration)).to eq({ "undefined" => 1 })
+            expect(SmarterJSON.process('{"undefined": 1}', acceleration: acceleration)).to eq([{ "undefined" => 1 }])
+            expect(SmarterJSON.process_one('{"undefined": 1}', acceleration: acceleration)).to eq({ "undefined" => 1 })
           end
         end
 
         describe "underscores in numeric literals" do
           it "parses 1_000_000 as 1000000" do
-            expect(SmarterJSON.process("1_000_000", acceleration: acceleration)).to eq(1_000_000)
+            expect(SmarterJSON.process("1_000_000", acceleration: acceleration)).to eq([1_000_000])
+            expect(SmarterJSON.process_one("1_000_000", acceleration: acceleration)).to eq(1_000_000)
           end
 
           it "parses 1_000.5 as 1000.5" do
-            expect(SmarterJSON.process("1_000.5", acceleration: acceleration)).to eq(1000.5)
+            expect(SmarterJSON.process("1_000.5", acceleration: acceleration)).to eq([1000.5])
+            expect(SmarterJSON.process_one("1_000.5", acceleration: acceleration)).to eq(1000.5)
           end
         end
 
         describe "line ending normalization" do
           it "accepts CRLF line endings" do
-            expect(SmarterJSON.process("{\r\n  a: 1\r\n  b: 2\r\n}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(SmarterJSON.process("{\r\n  a: 1\r\n  b: 2\r\n}", acceleration: acceleration)).to eq([{ "a" => 1, "b" => 2 }])
+            expect(SmarterJSON.process_one("{\r\n  a: 1\r\n  b: 2\r\n}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
 
           it "accepts CR-only line endings (classic Mac)" do
-            expect(SmarterJSON.process("{\r  a: 1\r  b: 2\r}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(SmarterJSON.process("{\r  a: 1\r  b: 2\r}", acceleration: acceleration)).to eq([{ "a" => 1, "b" => 2 }])
+            expect(SmarterJSON.process_one("{\r  a: 1\r  b: 2\r}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
 
           it "accepts mixed line endings in one document" do
-            expect(SmarterJSON.process("{\n  a: 1\r\n  b: 2\r  c: 3\n}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2, "c" => 3 })
+            expect(SmarterJSON.process("{\n  a: 1\r\n  b: 2\r  c: 3\n}", acceleration: acceleration)).to eq([{ "a" => 1, "b" => 2, "c" => 3 }])
+            expect(SmarterJSON.process_one("{\n  a: 1\r\n  b: 2\r  c: 3\n}", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2, "c" => 3 })
           end
 
           it "accepts # comments across CR-only line endings" do
-            expect(SmarterJSON.process("a: 1\r# note\rb: 2", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(SmarterJSON.process("a: 1\r# note\rb: 2", acceleration: acceleration)).to eq([{ "a" => 1, "b" => 2 }])
+            expect(SmarterJSON.process_one("a: 1\r# note\rb: 2", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
 
           it "accepts // comments across CR-only line endings" do
-            expect(SmarterJSON.process("a: 1\r// note\rb: 2", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            expect(SmarterJSON.process("a: 1\r// note\rb: 2", acceleration: acceleration)).to eq([{ "a" => 1, "b" => 2 }])
+            expect(SmarterJSON.process_one("a: 1\r// note\rb: 2", acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
           end
         end
 
         describe "duplicate keys" do
           it "last value wins by default" do
-            expect(SmarterJSON.process('{"dup": 1, "dup": 2}', acceleration: acceleration)["dup"]).to eq(2)
+            expect(SmarterJSON.process('{"dup": 1, "dup": 2}', acceleration: acceleration).first["dup"]).to eq(2)
+            expect(SmarterJSON.process_one('{"dup": 1, "dup": 2}', acceleration: acceleration)["dup"]).to eq(2)
           end
         end
       end
@@ -680,23 +817,28 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
       describe "top-level scalars" do
         it "parses bare integer at top level" do
-          expect(SmarterJSON.process("42", acceleration: acceleration)).to eq(42)
+          expect(SmarterJSON.process("42", acceleration: acceleration)).to eq([42])
+          expect(SmarterJSON.process_one("42", acceleration: acceleration)).to eq(42)
         end
 
         it "parses bare float at top level" do
-          expect(SmarterJSON.process("3.14", acceleration: acceleration)).to eq(3.14)
+          expect(SmarterJSON.process("3.14", acceleration: acceleration)).to eq([3.14])
+          expect(SmarterJSON.process_one("3.14", acceleration: acceleration)).to eq(3.14)
         end
 
         it "parses bare string at top level" do
-          expect(SmarterJSON.process('"hello"', acceleration: acceleration)).to eq("hello")
+          expect(SmarterJSON.process('"hello"', acceleration: acceleration)).to eq(["hello"])
+          expect(SmarterJSON.process_one('"hello"', acceleration: acceleration)).to eq("hello")
         end
 
         it "parses bare true at top level" do
-          expect(SmarterJSON.process("true", acceleration: acceleration)).to eq(true)
+          expect(SmarterJSON.process("true", acceleration: acceleration)).to eq([true])
+          expect(SmarterJSON.process_one("true", acceleration: acceleration)).to eq(true)
         end
 
         it "parses bare null at top level" do
-          expect(SmarterJSON.process("null", acceleration: acceleration)).to be_nil
+          expect(SmarterJSON.process("null", acceleration: acceleration)).to eq([nil])
+          expect(SmarterJSON.process_one("null", acceleration: acceleration)).to be_nil
         end
       end
 
@@ -707,24 +849,26 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       describe "encoding handling" do
         it "preserves input string encoding (UTF-8)" do
           input = '{"name": "café"}'.dup.force_encoding("UTF-8")
-          result = SmarterJSON.process(input, acceleration: acceleration)
+          result = SmarterJSON.process_one(input, acceleration: acceleration)
           expect(result["name"]).to eq("café")
           expect(result["name"].encoding).to eq(Encoding::UTF_8)
+          expect(SmarterJSON.process(input, acceleration: acceleration).first["name"].encoding).to eq(Encoding::UTF_8)
         end
 
         it "preserves Latin-1 input encoding without transcoding" do
           # "café" in Latin-1: 0x63 0x61 0x66 0xE9
           input = "{\"name\": \"caf\xE9\"}".b.force_encoding("ISO-8859-1")
-          result = SmarterJSON.process(input, acceleration: acceleration)
+          result = SmarterJSON.process_one(input, acceleration: acceleration)
           expect(result["name"].encoding).to eq(Encoding::ISO_8859_1)
           expect(result["name"].bytes).to eq([0x63, 0x61, 0x66, 0xE9])
+          expect(SmarterJSON.process(input, acceleration: acceleration).first["name"].encoding).to eq(Encoding::ISO_8859_1)
         end
 
         it "parse_file accepts :encoding option" do
           file = File.join(fixtures_dir, "json_pass1.json")
           result = SmarterJSON.process_file(file, encoding: "UTF-8", acceleration: acceleration)
-          expect(result).to be_a(Array)
-          expect(result[0]).to eq("JSON Test Pattern pass1")
+          expect(result.length).to eq(1) # always-array: one document (a top-level array)
+          expect(result[0][0]).to eq("JSON Test Pattern pass1")
         end
       end
 
@@ -735,49 +879,61 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       describe "error handling" do
         it "raises SmarterJSON::ParseError on truly unparseable input" do
           expect { SmarterJSON.process("this is not valid {json}", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one("this is not valid {json}", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
 
         it "raises SmarterJSON::ParseError on unterminated string" do
           expect { SmarterJSON.process('"unterminated', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated string/)
+          expect { SmarterJSON.process_one('"unterminated', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated string/)
         end
 
         it "raises SmarterJSON::ParseError on unterminated object" do
           expect { SmarterJSON.process('{"a": 1', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one('{"a": 1', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
 
         it "raises SmarterJSON::ParseError on unterminated array" do
           expect { SmarterJSON.process("[1, 2, 3", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one("[1, 2, 3", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
 
         it "raises on a mismatched closing bracket in an array ([1, 2})" do
           expect { SmarterJSON.process("[1, 2}", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one("[1, 2}", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
 
         it 'raises on a mismatched closing bracket in an object ({"a": 1])' do
           expect { SmarterJSON.process('{"a": 1]', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one('{"a": 1]', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
 
         it "returns nil for empty input (zero documents)" do
-          expect(SmarterJSON.process("", acceleration: acceleration)).to be_nil
+          expect(SmarterJSON.process("", acceleration: acceleration)).to eq([])
+          expect(SmarterJSON.process_one("", acceleration: acceleration)).to be_nil
         end
 
         it "returns nil for whitespace-only input (zero documents)" do
-          expect(SmarterJSON.process("    ", acceleration: acceleration)).to be_nil
+          expect(SmarterJSON.process("    ", acceleration: acceleration)).to eq([])
+          expect(SmarterJSON.process_one("    ", acceleration: acceleration)).to be_nil
         end
 
         it "returns nil for comment-only input (zero documents)" do
-          expect(SmarterJSON.process("// just a comment\n", acceleration: acceleration)).to be_nil
+          expect(SmarterJSON.process("// just a comment\n", acceleration: acceleration)).to eq([])
+          expect(SmarterJSON.process_one("// just a comment\n", acceleration: acceleration)).to be_nil
         end
 
         it "raises SmarterJSON::ParseError on bad escape sequence" do
           expect { SmarterJSON.process('"\q"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /escape/)
+          expect { SmarterJSON.process_one('"\q"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /escape/)
         end
 
         it "reports line and column on the error" do
           # A mismatched closing bracket on line 3 is genuinely unparseable.
           # (Note: `@` is NOT an error — it is a valid quoteless string.)
+          expect { SmarterJSON.process("{\n  \"a\": 1\n  ]", acceleration: acceleration) }
+            .to raise_error(SmarterJSON::ParseError) { |err| expect(err.line).to eq(3) }
 
-          SmarterJSON.process("{\n  \"a\": 1\n  ]", acceleration: acceleration)
+          SmarterJSON.process_one("{\n  \"a\": 1\n  ]", acceleration: acceleration)
           raise "expected ParseError"
         rescue SmarterJSON::ParseError => e
           expect(e.line).to eq(3)
@@ -787,11 +943,15 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
 
         it 'parses {"a": @} as a quoteless string (not an error)' do
-          expect(SmarterJSON.process('{"a": @}', acceleration: acceleration)).to eq({ "a" => "@" })
+          expect(SmarterJSON.process('{"a": @}', acceleration: acceleration)).to eq([{ "a" => "@" }])
+          expect(SmarterJSON.process_one('{"a": @}', acceleration: acceleration)).to eq({ "a" => "@" })
         end
 
         it "reports line and column on unterminated string" do
-          SmarterJSON.process('"oops', acceleration: acceleration)
+          expect { SmarterJSON.process('"oops', acceleration: acceleration) }
+            .to raise_error(SmarterJSON::ParseError) { |err| expect(err.line).to eq(1) }
+
+          SmarterJSON.process_one('"oops', acceleration: acceleration)
           raise "expected ParseError"
         rescue SmarterJSON::ParseError => e
           expect(e.line).to eq(1)
@@ -807,8 +967,8 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         it "reads and parses a UTF-8 fixture file" do
           file = File.join(fixtures_dir, "json_pass1.json")
           result = SmarterJSON.process_file(file, acceleration: acceleration)
-          expect(result).to be_a(Array)
-          expect(result[0]).to eq("JSON Test Pattern pass1")
+          expect(result.length).to eq(1) # always-array: one document (a top-level array)
+          expect(result[0][0]).to eq("JSON Test Pattern pass1")
         end
 
         it "raises Errno::ENOENT for missing file" do
@@ -860,8 +1020,8 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect(parse_values('{"a":1}{"b":2}', acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
         end
 
-        it "yields space-separated top-level values of mixed types" do
-          expect(parse_values('42 "x" true', acceleration: acceleration)).to eq([42, "x", true])
+        it "raises on a top-level bare run via the block form (a space is not a separator)" do
+          expect { parse_values('42 "x" true', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
 
         it "yields nothing for empty input" do
@@ -872,8 +1032,8 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect(parse_values("  // just a comment\n  ", acceleration: acceleration)).to eq([])
         end
 
-        it "returns nil from the block form" do
-          expect(SmarterJSON.process('{"a": 1}', acceleration: acceleration) { |_v| }).to be_nil
+        it "returns the document count from the block form" do
+          expect(SmarterJSON.process('{"a": 1}', acceleration: acceleration) { |_v| }).to eq(1)
         end
       end
 
@@ -883,11 +1043,11 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       # ============================================================
 
       describe "process: String / IO / block streaming" do
-        it "process(String) with a block yields each top-level document and returns nil" do
+        it "process(String) with a block yields each top-level document and returns the document count" do
           out = []
           rv = SmarterJSON.process(%({"id":1}\n{"id":2}\n{"id":3}), acceleration: acceleration) { |v| out << v }
           expect(out).to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
-          expect(rv).to be_nil
+          expect(rv).to eq(out.length) # block form returns the document count (== values yielded)
         end
 
         it "process(IO) with a block streams each document from the IO" do
@@ -895,7 +1055,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           out = []
           rv = SmarterJSON.process(io, acceleration: acceleration) { |v| out << v }
           expect(out).to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
-          expect(rv).to be_nil
+          expect(rv).to eq(out.length) # block form returns the document count (== values yielded)
         end
 
         it "process(IO) with a block ignores leading, trailing, and repeated LF blank lines" do
@@ -903,7 +1063,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           out = []
           rv = SmarterJSON.process(io, acceleration: acceleration) { |v| out << v }
           expect(out).to eq([{ "id" => 1 }, { "id" => 2 }])
-          expect(rv).to be_nil
+          expect(rv).to eq(out.length) # block form returns the document count (== values yielded)
         end
 
         it "process(IO) with a block ignores leading, trailing, and repeated CRLF blank lines" do
@@ -911,7 +1071,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           out = []
           rv = SmarterJSON.process(io, acceleration: acceleration) { |v| out << v }
           expect(out).to eq([{ "id" => 1 }, { "id" => 2 }])
-          expect(rv).to be_nil
+          expect(rv).to eq(out.length) # block form returns the document count (== values yielded)
         end
 
         it "process(IO) with a block handles CR-only blank lines and CR-only document separators" do
@@ -919,7 +1079,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           out = []
           rv = SmarterJSON.process(io, acceleration: acceleration) { |v| out << v }
           expect(out).to eq([{ "id" => 1 }, { "id" => 2 }])
-          expect(rv).to be_nil
+          expect(rv).to eq(out.length) # block form returns the document count (== values yielded)
         end
 
         it "process(IO) with a block handles mixed newline styles between documents" do
@@ -927,7 +1087,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           out = []
           rv = SmarterJSON.process(io, acceleration: acceleration) { |v| out << v }
           expect(out).to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
-          expect(rv).to be_nil
+          expect(rv).to eq(out.length) # block form returns the document count (== values yielded)
         end
 
         it "process(IO) with a block skips comment-only records between documents" do
@@ -935,11 +1095,11 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           out = []
           rv = SmarterJSON.process(io, acceleration: acceleration) { |v| out << v }
           expect(out).to eq([{ "id" => 1 }, { "id" => 2 }])
-          expect(rv).to be_nil
+          expect(rv).to eq(out.length) # block form returns the document count (== values yielded)
         end
 
-        it "process(IO) without a block returns the value or Array" do
-          expect(SmarterJSON.process(StringIO.new('{"a":1}'), acceleration: acceleration)).to eq({ "a" => 1 })
+        it "process(IO) without a block returns an Array of documents" do
+          expect(SmarterJSON.process(StringIO.new('{"a":1}'), acceleration: acceleration)).to eq([{ "a" => 1 }])
           expect(SmarterJSON.process(StringIO.new(%({"a":1}\n{"b":2})), acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
         end
 
@@ -963,11 +1123,11 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect { SmarterJSON.process(42, acceleration: acceleration) }.to raise_error(ArgumentError)
         end
 
-        it "process_file with a block streams each document from disk and returns nil" do
+        it "process_file with a block streams each document from disk and returns the document count" do
           out = []
           rv = SmarterJSON.process_file(File.join(fixtures_dir, "multi_doc.ndjson"), acceleration: acceleration) { |v| out << v }
           expect(out).to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
-          expect(rv).to be_nil
+          expect(rv).to eq(out.length) # block form returns the document count (== values yielded)
         end
 
         it "process_file with a block handles LF / CRLF / CR blank lines around documents" do
@@ -978,7 +1138,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
               f.write(content)
               f.flush
               rv = SmarterJSON.process_file(f.path, acceleration: acceleration) { |v| out << v }
-              expect(rv).to be_nil
+              expect(rv).to eq(out.length) # block form returns the document count (== values yielded)
             end
             expect(out).to eq([{ "id" => 1 }, { "id" => 2 }])
           end
@@ -991,7 +1151,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
             f.write("\n{\"id\":1}\r\n# note\r// note\n\n{\"id\":2}\r")
             f.flush
             rv = SmarterJSON.process_file(f.path, acceleration: acceleration) { |v| out << v }
-            expect(rv).to be_nil
+            expect(rv).to eq(out.length) # block form returns the document count (== values yielded)
           end
           expect(out).to eq([{ "id" => 1 }, { "id" => 2 }])
         end
@@ -1022,20 +1182,20 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       end
 
       describe "parse without a block (auto nil / value / Array)" do
-        it "returns nil for empty input (zero documents)" do
-          expect(SmarterJSON.process("", acceleration: acceleration)).to be_nil
+        it "returns [] for empty input (zero documents)" do
+          expect(SmarterJSON.process("", acceleration: acceleration)).to eq([])
         end
 
-        it "returns the value itself for a single document" do
-          expect(SmarterJSON.process('{"a": 1}', acceleration: acceleration)).to eq({ "a" => 1 })
+        it "returns a one-element Array for a single document" do
+          expect(SmarterJSON.process('{"a": 1}', acceleration: acceleration)).to eq([{ "a" => 1 }])
         end
 
-        it "returns a bare scalar as itself (single document)" do
-          expect(SmarterJSON.process("42", acceleration: acceleration)).to eq(42)
+        it "wraps a bare scalar in a one-element Array (single document)" do
+          expect(SmarterJSON.process("42", acceleration: acceleration)).to eq([42])
         end
 
-        it "returns a single top-level array as that array (one document, not flattened)" do
-          expect(SmarterJSON.process("[1, 2, 3]", acceleration: acceleration)).to eq([1, 2, 3])
+        it "wraps a single top-level array (one document, not flattened)" do
+          expect(SmarterJSON.process("[1, 2, 3]", acceleration: acceleration)).to eq([[1, 2, 3]])
         end
 
         it "returns an Array of documents for newline-delimited JSON (NDJSON / JSONL)" do
@@ -1072,43 +1232,48 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect(SmarterJSON.process('{"a":1}{"b":2}', acceleration: acceleration)).to eq([{ "a" => 1 }, { "b" => 2 }])
         end
 
-        it "returns an Array for space-separated top-level values of mixed types" do
-          expect(SmarterJSON.process('42 "x" true', acceleration: acceleration)).to eq([42, "x", true])
+        it "raises on a top-level bare run (a space is not a separator)" do
+          expect { SmarterJSON.process('42 "x" true', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
 
         it "returns an Array of arrays for newline-separated top-level arrays" do
           expect(SmarterJSON.process("[1,2]\n[3,4]", acceleration: acceleration)).to eq([[1, 2], [3, 4]])
         end
 
-        # Implicit-root ARRAY stays unsupported: commas do NOT separate top-level
-        # documents (only whitespace / newline / concatenation do), so a bracketless
-        # comma list is still an unexpected character after the first value.
-        it "still raises on a bracketless comma-separated top-level list (implicit array unsupported)" do
-          expect { SmarterJSON.process("1, 2, 3", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+        # Top-level commas separate documents (collapsing, like the in-container rule) —
+        # NOT an implicit root array: `1, 2, 3` is three documents [1, 2, 3], which stays
+        # distinct from the single array document `[1, 2, 3]` -> [[1, 2, 3]].
+        it "separates a bracketless comma list into top-level documents" do
+          expect(SmarterJSON.process("1, 2, 3", acceleration: acceleration)).to eq([1, 2, 3])
         end
 
-        it "still raises on bracketless comma-separated bare words" do
+        it "raises on bracketless comma-separated bare words (each is a bare top-level word)" do
           expect { SmarterJSON.process("red, green, blue", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
       end
 
       describe "parser edge cases (coverage)" do
         it "parses undefined as nil" do
-          expect(SmarterJSON.process("undefined", acceleration: acceleration)).to be_nil
+          expect(SmarterJSON.process("undefined", acceleration: acceleration)).to eq([nil])
+          expect(SmarterJSON.process_one("undefined", acceleration: acceleration)).to be_nil
         end
 
         it "raises on truncated input (unterminated container)" do
           expect { SmarterJSON.process("[1, 2", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one("[1, 2", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
           expect { SmarterJSON.process('{"a":', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one('{"a":', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
 
         it "treats rare Unicode whitespace (U+1680 Ogham, U+205F math space) as whitespace" do
           ws = [0x1680, 0x205f].pack("U*")
-          expect(SmarterJSON.process("#{ws}42", acceleration: acceleration)).to eq(42)
+          expect(SmarterJSON.process("#{ws}42", acceleration: acceleration)).to eq([42])
+          expect(SmarterJSON.process_one("#{ws}42", acceleration: acceleration)).to eq(42)
         end
 
         it "treats the ideographic space (U+3000) as whitespace between tokens" do
-          expect(SmarterJSON.process("　{}　", acceleration: acceleration)).to eq({})
+          expect(SmarterJSON.process("　{}　", acceleration: acceleration)).to eq([{}])
+          expect(SmarterJSON.process_one("　{}　", acceleration: acceleration)).to eq({})
         end
 
         # A '#' starts a comment only when preceded by whitespace. Here the
@@ -1116,118 +1281,159 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         # space between it and the '#', exercising the rare walk-back-over-
         # continuation-bytes branch of preceded_by_ws_or_start?.
         it "applies the comment-marker rule when the preceding whitespace is a multibyte Unicode space" do
-          expect(SmarterJSON.process("42 # trailing comment\n", acceleration: acceleration)).to eq(42)
+          expect(SmarterJSON.process("42 # trailing comment\n", acceleration: acceleration)).to eq([42])
+          expect(SmarterJSON.process_one("42 # trailing comment\n", acceleration: acceleration)).to eq(42)
         end
 
         it "raises on an unterminated smart-quoted string" do
           expect { SmarterJSON.process("[“unclosed", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one("[“unclosed", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
 
         it "classifies a quoteless 'undefined' value as nil" do
-          expect(SmarterJSON.process("{a: undefined}", acceleration: acceleration)).to eq({ "a" => nil })
+          expect(SmarterJSON.process("{a: undefined}", acceleration: acceleration)).to eq([{ "a" => nil }])
+          expect(SmarterJSON.process_one("{a: undefined}", acceleration: acceleration)).to eq({ "a" => nil })
         end
 
         it "classifies a quoteless 'NaN' value as Float::NAN" do
-          result = SmarterJSON.process("{a: NaN}", acceleration: acceleration)
+          result = SmarterJSON.process_one("{a: NaN}", acceleration: acceleration)
           expect(result["a"]).to be_a(Float)
           expect(result["a"]).to be_nan
+          expect(SmarterJSON.process("{a: NaN}", acceleration: acceleration).first["a"]).to be_a(Float).and(be_nan)
         end
 
         it "classifies a quoteless 'Infinity' / '+Infinity' value as Float::INFINITY" do
-          expect(SmarterJSON.process("{a: Infinity}", acceleration: acceleration)).to eq({ "a" => Float::INFINITY })
-          expect(SmarterJSON.process("{a: +Infinity}", acceleration: acceleration)).to eq({ "a" => Float::INFINITY })
+          expect(SmarterJSON.process("{a: Infinity}", acceleration: acceleration)).to eq([{ "a" => Float::INFINITY }])
+          expect(SmarterJSON.process_one("{a: Infinity}", acceleration: acceleration)).to eq({ "a" => Float::INFINITY })
+          expect(SmarterJSON.process("{a: +Infinity}", acceleration: acceleration)).to eq([{ "a" => Float::INFINITY }])
+          expect(SmarterJSON.process_one("{a: +Infinity}", acceleration: acceleration)).to eq({ "a" => Float::INFINITY })
         end
 
         # JSON5 line continuation: a backslash immediately before a CRLF emits
         # nothing, joining the two lines (the CR branch must also swallow the LF).
         it "treats a backslash before CRLF inside a string as a line continuation" do
-          expect(SmarterJSON.process(%("a\\\r\nb"), acceleration: acceleration)).to eq("ab")
+          expect(SmarterJSON.process(%("a\\\r\nb"), acceleration: acceleration)).to eq(["ab"])
+          expect(SmarterJSON.process_one(%("a\\\r\nb"), acceleration: acceleration)).to eq("ab")
         end
 
-        it "decodes a valid UTF-16 surrogate pair (\\uD83D\\uDE00 -> grinning face)" do
-          expect(SmarterJSON.process(%q{"\uD83D\uDE00"}, acceleration: acceleration)).to eq("\u{1F600}")
+        it "decodes a valid UTF-16 stand-in pair (\\uD83D\\uDE00 -> grinning face)" do
+          expect(SmarterJSON.process('"😀"', acceleration: acceleration)).to eq(["\u{1F600}"])
+          expect(SmarterJSON.process(%q{"\uD83D\uDE00"}, acceleration: acceleration)).to eq(["\u{1F600}"])
+          expect(SmarterJSON.process_one(%q{"\uD83D\uDE00"}, acceleration: acceleration)).to eq("\u{1F600}")
         end
 
-        it "raises on a high surrogate not followed by a \\u escape" do
+        it "raises on a high stand-in not followed by a \\u escape" do
           expect { SmarterJSON.process('"\uD800x"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one('"\uD800x"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
 
-        it "raises on a high surrogate followed by an invalid low-surrogate \\u escape" do
+        it "raises on a high stand-in followed by an invalid low-stand-in \\u escape" do
           expect { SmarterJSON.process('"\uD800\uZZZZ"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one('"\uD800\uZZZZ"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
 
-        it "raises on a high surrogate followed by a non-low-surrogate code point" do
-          expect { SmarterJSON.process('"\uD800\u0041"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+        it "raises on a high stand-in followed by a non-low-stand-in code point" do
+          expect { SmarterJSON.process('"\uD800A"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one('"\uD800\u0041"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
 
         # Regression (found by fuzzing): a \\u escape whose next 4 bytes split a raw
         # multibyte character must raise a clean ParseError, not leak ArgumentError
         # ("invalid byte sequence in UTF-8") from the Ruby path's hex check.
         it "raises ParseError (not ArgumentError) when a backslash-u escape is followed by bytes splitting a multibyte char" do
+          expect { SmarterJSON.process('"' + "\\uaaa" + [0x3042].pack("U") + '"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
           input = '"' + "\\uaaa" + [0x3042].pack("U") + '"' # "\\uaaa<3-byte char>"
-          expect { SmarterJSON.process(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
 
         # Commas are collapsing separators: empty slots around / between commas are
         # skipped, in both arrays and objects. An explicit `null` is still a value.
         it "skips empty array slots from leading / interior / trailing commas" do
-          expect(SmarterJSON.process("[,]", acceleration: acceleration)).to eq([])
-          expect(SmarterJSON.process("[,,,]", acceleration: acceleration)).to eq([])
-          expect(SmarterJSON.process("[,1]", acceleration: acceleration)).to eq([1])
-          expect(SmarterJSON.process("[1,]", acceleration: acceleration)).to eq([1])
-          expect(SmarterJSON.process("[1,2,]", acceleration: acceleration)).to eq([1, 2])
-          expect(SmarterJSON.process("[1,,2]", acceleration: acceleration)).to eq([1, 2])
-          expect(SmarterJSON.process("[,1,,2,]", acceleration: acceleration)).to eq([1, 2])
+          expect(SmarterJSON.process("[,]", acceleration: acceleration)).to eq([[]])
+          expect(SmarterJSON.process_one("[,]", acceleration: acceleration)).to eq([])
+          expect(SmarterJSON.process("[,,,]", acceleration: acceleration)).to eq([[]])
+          expect(SmarterJSON.process_one("[,,,]", acceleration: acceleration)).to eq([])
+          expect(SmarterJSON.process("[,1]", acceleration: acceleration)).to eq([[1]])
+          expect(SmarterJSON.process_one("[,1]", acceleration: acceleration)).to eq([1])
+          expect(SmarterJSON.process("[1,]", acceleration: acceleration)).to eq([[1]])
+          expect(SmarterJSON.process_one("[1,]", acceleration: acceleration)).to eq([1])
+          expect(SmarterJSON.process("[1,2,]", acceleration: acceleration)).to eq([[1, 2]])
+          expect(SmarterJSON.process_one("[1,2,]", acceleration: acceleration)).to eq([1, 2])
+          expect(SmarterJSON.process("[1,,2]", acceleration: acceleration)).to eq([[1, 2]])
+          expect(SmarterJSON.process_one("[1,,2]", acceleration: acceleration)).to eq([1, 2])
+          expect(SmarterJSON.process("[,1,,2,]", acceleration: acceleration)).to eq([[1, 2]])
+          expect(SmarterJSON.process_one("[,1,,2,]", acceleration: acceleration)).to eq([1, 2])
         end
 
         it "keeps an explicit null as a value (only truly empty slots are skipped)" do
-          expect(SmarterJSON.process("[null]", acceleration: acceleration)).to eq([nil])
-          expect(SmarterJSON.process("[1,null,2]", acceleration: acceleration)).to eq([1, nil, 2])
+          expect(SmarterJSON.process("[null]", acceleration: acceleration)).to eq([[nil]])
+          expect(SmarterJSON.process_one("[null]", acceleration: acceleration)).to eq([nil])
+          expect(SmarterJSON.process("[1,null,2]", acceleration: acceleration)).to eq([[1, nil, 2]])
+          expect(SmarterJSON.process_one("[1,null,2]", acceleration: acceleration)).to eq([1, nil, 2])
         end
 
         it "skips empty object members from leading / interior / trailing commas" do
-          expect(SmarterJSON.process("{}", acceleration: acceleration)).to eq({})
-          expect(SmarterJSON.process('{,"a":1}', acceleration: acceleration)).to eq({ "a" => 1 })
-          expect(SmarterJSON.process('{"a":1,,"b":2}', acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
-          expect(SmarterJSON.process('{"a":1,}', acceleration: acceleration)).to eq({ "a" => 1 })
+          expect(SmarterJSON.process("{}", acceleration: acceleration)).to eq([{}])
+          expect(SmarterJSON.process_one("{}", acceleration: acceleration)).to eq({})
+          expect(SmarterJSON.process('{,"a":1}', acceleration: acceleration)).to eq([{ "a" => 1 }])
+          expect(SmarterJSON.process_one('{,"a":1}', acceleration: acceleration)).to eq({ "a" => 1 })
+          expect(SmarterJSON.process('{"a":1,,"b":2}', acceleration: acceleration)).to eq([{ "a" => 1, "b" => 2 }])
+          expect(SmarterJSON.process_one('{"a":1,,"b":2}', acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+          expect(SmarterJSON.process('{"a":1,}', acceleration: acceleration)).to eq([{ "a" => 1 }])
+          expect(SmarterJSON.process_one('{"a":1,}', acceleration: acceleration)).to eq({ "a" => 1 })
         end
 
         # A key WITH a colon but no value is different from an empty comma-slot: the key
         # is present, so the value is null (not "" and not skipped).
         it "interprets an empty hash value (key, colon, no value) as null" do
-          expect(SmarterJSON.process("{a:}", acceleration: acceleration)).to eq({ "a" => nil })
-          expect(SmarterJSON.process('{"a":}', acceleration: acceleration)).to eq({ "a" => nil })
-          expect(SmarterJSON.process("{a:,b:2}", acceleration: acceleration)).to eq({ "a" => nil, "b" => 2 })
-          expect(SmarterJSON.process('{"":}', acceleration: acceleration)).to eq({ "" => nil })
+          expect(SmarterJSON.process("{a:}", acceleration: acceleration)).to eq([{ "a" => nil }])
+          expect(SmarterJSON.process_one("{a:}", acceleration: acceleration)).to eq({ "a" => nil })
+          expect(SmarterJSON.process('{"a":}', acceleration: acceleration)).to eq([{ "a" => nil }])
+          expect(SmarterJSON.process_one('{"a":}', acceleration: acceleration)).to eq({ "a" => nil })
+          expect(SmarterJSON.process("{a:,b:2}", acceleration: acceleration)).to eq([{ "a" => nil, "b" => 2 }])
+          expect(SmarterJSON.process_one("{a:,b:2}", acceleration: acceleration)).to eq({ "a" => nil, "b" => 2 })
+          expect(SmarterJSON.process('{"":}', acceleration: acceleration)).to eq([{ "" => nil }])
+          expect(SmarterJSON.process_one('{"":}', acceleration: acceleration)).to eq({ "" => nil })
         end
 
         it "raises 'invalid number' on a lone sign with no digits" do
           expect { SmarterJSON.process("-", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one("-", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
           expect { SmarterJSON.process("+", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one("+", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
 
         it "parses a hex number with lowercase a-f digits" do
-          expect(SmarterJSON.process("0xabc", acceleration: acceleration)).to eq(0xabc)
+          expect(SmarterJSON.process("0xabc", acceleration: acceleration)).to eq([0xabc])
+          expect(SmarterJSON.process_one("0xabc", acceleration: acceleration)).to eq(0xabc)
         end
 
         # Regression (found by fuzzing): a token that is an exponent with no mantissa
         # digit (e.g. "-e695881", "e399855") is NOT a number — it's a quoteless string.
         # The Ruby path used to read it as 0.0 because DEC_RE made the mantissa optional.
         it "treats a mantissa-less exponent token as a quoteless string, not 0.0" do
-          expect(SmarterJSON.process("[-e695881]", acceleration: acceleration)).to eq(["-e695881"])
-          expect(SmarterJSON.process("[e399855]", acceleration: acceleration)).to eq(["e399855"])
+          expect(SmarterJSON.process("[-e695881]", acceleration: acceleration)).to eq([["-e695881"]])
+          expect(SmarterJSON.process_one("[-e695881]", acceleration: acceleration)).to eq(["-e695881"])
+          expect(SmarterJSON.process("[e399855]", acceleration: acceleration)).to eq([["e399855"]])
+          expect(SmarterJSON.process_one("[e399855]", acceleration: acceleration)).to eq(["e399855"])
         end
 
         it "still parses valid numbers with exponents and leading/trailing dots" do
-          expect(SmarterJSON.process("[1e5]", acceleration: acceleration)).to eq([1e5])
-          expect(SmarterJSON.process("[.5]", acceleration: acceleration)).to eq([0.5])
-          expect(SmarterJSON.process("[5.]", acceleration: acceleration)).to eq([5.0])
-          expect(SmarterJSON.process("[-1.5e-3]", acceleration: acceleration)).to eq([-1.5e-3])
-          expect(SmarterJSON.process("[.5e3]", acceleration: acceleration)).to eq([500.0])
+          expect(SmarterJSON.process("[1e5]", acceleration: acceleration)).to eq([[1e5]])
+          expect(SmarterJSON.process_one("[1e5]", acceleration: acceleration)).to eq([1e5])
+          expect(SmarterJSON.process("[.5]", acceleration: acceleration)).to eq([[0.5]])
+          expect(SmarterJSON.process_one("[.5]", acceleration: acceleration)).to eq([0.5])
+          expect(SmarterJSON.process("[5.]", acceleration: acceleration)).to eq([[5.0]])
+          expect(SmarterJSON.process_one("[5.]", acceleration: acceleration)).to eq([5.0])
+          expect(SmarterJSON.process("[-1.5e-3]", acceleration: acceleration)).to eq([[-1.5e-3]])
+          expect(SmarterJSON.process_one("[-1.5e-3]", acceleration: acceleration)).to eq([-1.5e-3])
+          expect(SmarterJSON.process("[.5e3]", acceleration: acceleration)).to eq([[500.0]])
+          expect(SmarterJSON.process_one("[.5e3]", acceleration: acceleration)).to eq([500.0])
         end
 
         it "raises 'unexpected character' on a non-printable control byte" do
           expect { SmarterJSON.process("\x07", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one("\x07", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
         end
       end
 
@@ -1237,7 +1443,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
       describe "fixture-based integration" do
         it "parses comments_test.hjson with all comment styles and string values" do
-          result = SmarterJSON.process_file(File.join(fixtures_dir, "comments_test.hjson"), acceleration: acceleration)
+          result = SmarterJSON.process_file(File.join(fixtures_dir, "comments_test.hjson"), acceleration: acceleration).first # single-document fixture
           expect(result["foo1"]).to eq("This is a string value.")   # quoteless, ends at " #"
           expect(result["foo2"]).to eq("This is a string value.")   # quoted
           expect(result["bar1"]).to eq("This is a string value.")   # quoteless, ends at " //"
@@ -1257,7 +1463,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
 
         it "parses strings_test.hjson and recognizes string-vs-literal distinction" do
-          result = SmarterJSON.process_file(File.join(fixtures_dir, "strings_test.hjson"), acceleration: acceleration)
+          result = SmarterJSON.process_file(File.join(fixtures_dir, "strings_test.hjson"), acceleration: acceleration).first # single-document fixture
           expect(result["text1"]).to eq("This is a valid string value.")
           expect(result["text3"]).to eq("You need quotes\tfor escapes")
           expect(result["text4a"]).to eq(" untrimmed ")
@@ -1275,7 +1481,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
 
         it "parses oa_test.hjson as a 7-element mixed array" do
-          result = SmarterJSON.process_file(File.join(fixtures_dir, "oa_test.hjson"), acceleration: acceleration)
+          result = SmarterJSON.process_file(File.join(fixtures_dir, "oa_test.hjson"), acceleration: acceleration).first # single-document fixture
           expect(result.size).to eq(7)
           expect(result[0]).to eq("a")
           expect(result[1]).to eq({})
@@ -1287,12 +1493,12 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
 
         it "parses root_test.hjson (implicit root + nested object)" do
-          result = SmarterJSON.process_file(File.join(fixtures_dir, "root_test.hjson"), acceleration: acceleration)
+          result = SmarterJSON.process_file(File.join(fixtures_dir, "root_test.hjson"), acceleration: acceleration).first # single-document fixture
           expect(result).to eq({ "database" => { "host" => "127.0.0.1", "port" => 555 } })
         end
 
         it "parses kan_test.hjson (mixed number/literal/string contexts)" do
-          result = SmarterJSON.process_file(File.join(fixtures_dir, "kan_test.hjson"), acceleration: acceleration)
+          result = SmarterJSON.process_file(File.join(fixtures_dir, "kan_test.hjson"), acceleration: acceleration).first # single-document fixture
           # numbers context: recognized numbers (commas optional)
           expect(result["numbers"]).to eq([0, 0, -0, 42, 42.1, -5, -5.1, 1701.0, -1701.0, 12.345, -12.345])
           # native context: true/false/null
@@ -1307,7 +1513,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
 
         it "parses empty_test.hjson with empty-string key" do
-          result = SmarterJSON.process_file(File.join(fixtures_dir, "empty_test.hjson"), acceleration: acceleration)
+          result = SmarterJSON.process_file(File.join(fixtures_dir, "empty_test.hjson"), acceleration: acceleration).first # single-document fixture
           expect(result).to eq({ "" => "empty" })
         end
 
@@ -1332,7 +1538,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
 
         it "parses oj_pass1.json (similar to json_pass1, with numeric overflow)" do
-          result = SmarterJSON.process_file(File.join(fixtures_dir, "oj_pass1.json"), acceleration: acceleration)
+          result = SmarterJSON.process_file(File.join(fixtures_dir, "oj_pass1.json"), acceleration: acceleration).first # single-document fixture (a top-level array)
           expect(result).to be_a(Array)
           expect(result[0]).to eq("JSON Test Pattern pass1")
           # 23456789012E666 overflows to Infinity (per §7.2 tentative)
@@ -1346,20 +1552,24 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
       describe "control characters and escapes" do
         it "keeps a raw tab byte literally inside a double-quoted string" do
-          expect(SmarterJSON.process(%("a\tb"), acceleration: acceleration)).to eq("a\tb")
+          expect(SmarterJSON.process(%("a\tb"), acceleration: acceleration)).to eq(["a\tb"])
+          expect(SmarterJSON.process_one(%("a\tb"), acceleration: acceleration)).to eq("a\tb")
         end
 
         it "keeps a raw newline byte literally inside a double-quoted string" do
-          expect(SmarterJSON.process(%("a\nb"), acceleration: acceleration)).to eq("a\nb")
+          expect(SmarterJSON.process(%("a\nb"), acceleration: acceleration)).to eq(["a\nb"])
+          expect(SmarterJSON.process_one(%("a\nb"), acceleration: acceleration)).to eq("a\nb")
         end
 
         it 'processes \\n escape inside a single-quoted string (same as double-quoted)' do
+          expect(SmarterJSON.process("'a\\nb'", acceleration: acceleration)).to eq(["a\nb"])
           # Ruby source "'a\\nb'" is the 5 chars  ' a \ n b ' → parser turns \n into a newline
-          expect(SmarterJSON.process("'a\\nb'", acceleration: acceleration)).to eq("a\nb")
+          expect(SmarterJSON.process_one("'a\\nb'", acceleration: acceleration)).to eq("a\nb")
         end
 
         it 'processes \\t escape inside a single-quoted string' do
-          expect(SmarterJSON.process("'a\\tb'", acceleration: acceleration)).to eq("a\tb")
+          expect(SmarterJSON.process("'a\\tb'", acceleration: acceleration)).to eq(["a\tb"])
+          expect(SmarterJSON.process_one("'a\\tb'", acceleration: acceleration)).to eq("a\tb")
         end
       end
 
@@ -1370,104 +1580,123 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       describe "options" do
         describe "symbolize_keys" do
           it "returns symbol keys when symbolize_keys: true" do
-            expect(SmarterJSON.process('{"a": 1, "b": 2}', symbolize_keys: true, acceleration: acceleration)).to eq({ a: 1, b: 2 })
+            expect(SmarterJSON.process('{"a": 1, "b": 2}', symbolize_keys: true, acceleration: acceleration)).to eq([{ a: 1, b: 2 }])
+            expect(SmarterJSON.process_one('{"a": 1, "b": 2}', symbolize_keys: true, acceleration: acceleration)).to eq({ a: 1, b: 2 })
           end
 
           it "symbolizes nested object keys" do
-            expect(SmarterJSON.process('{"outer": {"inner": 1}}', symbolize_keys: true, acceleration: acceleration)).to eq({ outer: { inner: 1 } })
+            expect(SmarterJSON.process('{"outer": {"inner": 1}}', symbolize_keys: true, acceleration: acceleration)).to eq([{ outer: { inner: 1 } }])
+            expect(SmarterJSON.process_one('{"outer": {"inner": 1}}', symbolize_keys: true, acceleration: acceleration)).to eq({ outer: { inner: 1 } })
           end
 
           it "defaults to string keys" do
-            expect(SmarterJSON.process('{"a": 1}', acceleration: acceleration)).to eq({ "a" => 1 })
+            expect(SmarterJSON.process('{"a": 1}', acceleration: acceleration)).to eq([{ "a" => 1 }])
+            expect(SmarterJSON.process_one('{"a": 1}', acceleration: acceleration)).to eq({ "a" => 1 })
           end
         end
 
         describe "deep nesting" do
           it "parses deeply nested input without stack overflow (iterative parser, both paths)" do
             deep = ("[" * 1000) + ("]" * 1000)
-            result = SmarterJSON.process(deep, acceleration: acceleration)
+            result = SmarterJSON.process_one(deep, acceleration: acceleration)
             expect(result).to be_a(Array)
+            expect(SmarterJSON.process(deep, acceleration: acceleration).first).to be_a(Array)
           end
         end
 
         describe "duplicate_key" do
           it "last value wins by default" do
-            expect(SmarterJSON.process('{"a": 1, "a": 2}', acceleration: acceleration)["a"]).to eq(2)
+            expect(SmarterJSON.process('{"a": 1, "a": 2}', acceleration: acceleration).first["a"]).to eq(2)
+            expect(SmarterJSON.process_one('{"a": 1, "a": 2}', acceleration: acceleration)["a"]).to eq(2)
           end
 
           it "first value wins with duplicate_key: :first_wins" do
-            expect(SmarterJSON.process('{"a": 1, "a": 2}', duplicate_key: :first_wins, acceleration: acceleration)["a"]).to eq(1)
+            expect(SmarterJSON.process('{"a": 1, "a": 2}', duplicate_key: :first_wins, acceleration: acceleration).first["a"]).to eq(1)
+            expect(SmarterJSON.process_one('{"a": 1, "a": 2}', duplicate_key: :first_wins, acceleration: acceleration)["a"]).to eq(1)
           end
         end
 
         describe "decimal_precision (Oj-compatible; default :auto)" do
           it "loads a >16-significant-digit decimal as BigDecimal by default (:auto)" do
-            expect(SmarterJSON.process("0.12345678901234567", acceleration: acceleration)).to eql(BigDecimal("0.12345678901234567"))
+            expect(SmarterJSON.process("0.12345678901234567", acceleration: acceleration)).to eql([BigDecimal("0.12345678901234567")])
+            expect(SmarterJSON.process_one("0.12345678901234567", acceleration: acceleration)).to eql(BigDecimal("0.12345678901234567"))
           end
 
           it "keeps a 16-significant-digit decimal as Float (:auto)" do
-            expect(SmarterJSON.process("0.1234567890123456", acceleration: acceleration)).to eql(0.1234567890123456)
+            expect(SmarterJSON.process("0.1234567890123456", acceleration: acceleration)).to eql([0.1234567890123456])
+            expect(SmarterJSON.process_one("0.1234567890123456", acceleration: acceleration)).to eql(0.1234567890123456)
           end
 
           it "keeps a 20-digit integer as Integer, never BigDecimal (:auto)" do
-            expect(SmarterJSON.process("12345678901234567890", acceleration: acceleration)).to eql(12_345_678_901_234_567_890)
+            expect(SmarterJSON.process("12345678901234567890", acceleration: acceleration)).to eql([12_345_678_901_234_567_890])
+            expect(SmarterJSON.process_one("12345678901234567890", acceleration: acceleration)).to eql(12_345_678_901_234_567_890)
           end
 
           it "forces Float with decimal_precision: :float even for high precision" do
-            expect(SmarterJSON.process("0.12345678901234567", decimal_precision: :float, acceleration: acceleration)).to be_a(Float)
+            expect(SmarterJSON.process("0.12345678901234567", decimal_precision: :float, acceleration: acceleration).first).to be_a(Float)
+            expect(SmarterJSON.process_one("0.12345678901234567", decimal_precision: :float, acceleration: acceleration)).to be_a(Float)
           end
 
           it "forces BigDecimal for any decimal with decimal_precision: :bigdecimal" do
-            expect(SmarterJSON.process("3.14", decimal_precision: :bigdecimal, acceleration: acceleration)).to eql(BigDecimal("3.14"))
+            expect(SmarterJSON.process("3.14", decimal_precision: :bigdecimal, acceleration: acceleration)).to eql([BigDecimal("3.14")])
+            expect(SmarterJSON.process_one("3.14", decimal_precision: :bigdecimal, acceleration: acceleration)).to eql(BigDecimal("3.14"))
           end
 
           it "applies in array/member position too" do
-            result = SmarterJSON.process("[0.12345678901234567, 1.5]", acceleration: acceleration)
+            result = SmarterJSON.process_one("[0.12345678901234567, 1.5]", acceleration: acceleration)
             expect(result[0]).to eql(BigDecimal("0.12345678901234567"))
             expect(result[1]).to eql(1.5)
+            expect(SmarterJSON.process("[0.12345678901234567, 1.5]", acceleration: acceleration).first).to eql(result)
           end
 
           it "normalizes a trailing-dot decimal under :bigdecimal" do
-            result = SmarterJSON.process("5.", decimal_precision: :bigdecimal, acceleration: acceleration)
+            result = SmarterJSON.process_one("5.", decimal_precision: :bigdecimal, acceleration: acceleration)
             expect(result).to be_a(BigDecimal)
             expect(result).to eq(BigDecimal("5"))
+            expect(SmarterJSON.process("5.", decimal_precision: :bigdecimal, acceleration: acceleration).first).to be_a(BigDecimal)
           end
         end
 
-        describe "Ryū float fallback corners (guards the single-pass number scan)" do
+        describe "high-precision float fallback corners (guards the single-pass number scan)" do
           # These exercise the paths the Float converter falls back to strtod /
-          # rb_cstr_to_dbl for: >17 mantissa digits, the subnormal range, extreme
+          # rb_cstr_to_dbl for: >18 mantissa digits, the subnormal range, extreme
           # exponents, and -0.0. The single-pass rewrite must extract identical
           # mantissa/exponent parts, so the resulting Float stays bit-identical to
           # Ruby's own String#to_f.
 
-          it "matches String#to_f for a >17-significant-digit float (strtod fallback)" do
-            s = "1.2345678901234567890" # 20 sig digits — beyond Ryū's 17-digit fast path
-            expect(SmarterJSON.process(s, decimal_precision: :float, acceleration: acceleration)).to eql(s.to_f)
+          it "matches String#to_f for a >18-significant-digit float (strtod fallback)" do
+            s = "1.2345678901234567890" # 20 sig digits — beyond the 18-digit Eisel-Lemire fast path
+            expect(SmarterJSON.process(s, decimal_precision: :float, acceleration: acceleration)).to eql([s.to_f])
+            expect(SmarterJSON.process_one(s, decimal_precision: :float, acceleration: acceleration)).to eql(s.to_f)
           end
 
           it "matches String#to_f for a subnormal-range float" do
             s = "1e-310" # mantissa_digits + exponent < -307 — subnormal fallback
-            expect(SmarterJSON.process(s, acceleration: acceleration)).to eql(s.to_f)
+            expect(SmarterJSON.process(s, acceleration: acceleration)).to eql([s.to_f])
+            expect(SmarterJSON.process_one(s, acceleration: acceleration)).to eql(s.to_f)
           end
 
           it "returns Infinity for an extreme positive exponent" do
-            expect(SmarterJSON.process("1e2000000", acceleration: acceleration)).to eql(Float::INFINITY)
+            expect(SmarterJSON.process("1e2000000", acceleration: acceleration)).to eql([Float::INFINITY])
+            expect(SmarterJSON.process_one("1e2000000", acceleration: acceleration)).to eql(Float::INFINITY)
           end
 
           it "returns 0.0 for an extreme negative exponent" do
-            expect(SmarterJSON.process("1e-2000000", acceleration: acceleration)).to eql(0.0)
+            expect(SmarterJSON.process("1e-2000000", acceleration: acceleration)).to eql([0.0])
+            expect(SmarterJSON.process_one("1e-2000000", acceleration: acceleration)).to eql(0.0)
           end
 
           it "preserves negative zero (-0.0, distinct from 0.0)" do
-            result = SmarterJSON.process("-0.0", acceleration: acceleration)
+            result = SmarterJSON.process_one("-0.0", acceleration: acceleration)
             expect(result).to eql(-0.0)
             expect(1.0 / result).to eql(-Float::INFINITY) # sign bit preserved
+            expect(SmarterJSON.process("-0.0", acceleration: acceleration).first).to eql(-0.0)
           end
 
-          it "matches String#to_f for a >17-digit float carrying underscores" do
-            s = "1.234_567_890_123_456_789" # underscores + >17 digits — strip then strtod fallback
-            expect(SmarterJSON.process(s, decimal_precision: :float, acceleration: acceleration)).to eql(s.delete("_").to_f)
+          it "matches String#to_f for a >18-digit float carrying underscores" do
+            s = "1.234_567_890_123_456_789" # underscores + >18 digits — strip then strtod fallback
+            expect(SmarterJSON.process(s, decimal_precision: :float, acceleration: acceleration)).to eql([s.delete("_").to_f])
+            expect(SmarterJSON.process_one(s, decimal_precision: :float, acceleration: acceleration)).to eql(s.delete("_").to_f)
           end
         end
       end
@@ -1478,19 +1707,23 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
       describe "whitespace semantics ([[:space:]], same as Rails blank?)" do
         it "treats vertical tab (0x0B) as whitespace between tokens" do
-          expect(SmarterJSON.process("[1,\x0B2,\x0B3]", acceleration: acceleration)).to eq([1, 2, 3])
+          expect(SmarterJSON.process("[1,\x0B2,\x0B3]", acceleration: acceleration)).to eq([[1, 2, 3]])
+          expect(SmarterJSON.process_one("[1,\x0B2,\x0B3]", acceleration: acceleration)).to eq([1, 2, 3])
         end
 
         it "treats form feed (0x0C) as whitespace between tokens" do
-          expect(SmarterJSON.process("[1,\x0C2,\x0C3]", acceleration: acceleration)).to eq([1, 2, 3])
+          expect(SmarterJSON.process("[1,\x0C2,\x0C3]", acceleration: acceleration)).to eq([[1, 2, 3]])
+          expect(SmarterJSON.process_one("[1,\x0C2,\x0C3]", acceleration: acceleration)).to eq([1, 2, 3])
         end
 
         it "treats NBSP (U+00A0) as whitespace between tokens" do
-          expect(SmarterJSON.process("[\u00A01\u00A0,\u00A02]", acceleration: acceleration)).to eq([1, 2])
+          expect(SmarterJSON.process("[ 1 , 2]", acceleration: acceleration)).to eq([[1, 2]])
+          expect(SmarterJSON.process_one("[\u00A01\u00A0,\u00A02]", acceleration: acceleration)).to eq([1, 2])
         end
 
         it "trims NBSP (U+00A0) around a quoteless value" do
-          expect(SmarterJSON.process("x:\u00A0value\u00A0", acceleration: acceleration)).to eq({ "x" => "value" })
+          expect(SmarterJSON.process("x: value ", acceleration: acceleration)).to eq([{ "x" => "value" }])
+          expect(SmarterJSON.process_one("x:\u00A0value\u00A0", acceleration: acceleration)).to eq({ "x" => "value" })
         end
       end
 
@@ -1500,8 +1733,9 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
       describe "encoding errors" do
         it "raises SmarterJSON::EncodingError on bytes invalid for the claimed encoding" do
+          expect { SmarterJSON.process("\"bad\xFF byte\"".b.force_encoding("UTF-8"), acceleration: acceleration) }.to raise_error(SmarterJSON::EncodingError)
           input = "\"bad\xFF byte\"".b.force_encoding("UTF-8") # 0xFF is not valid UTF-8
-          expect { SmarterJSON.process(input, acceleration: acceleration) }.to raise_error(SmarterJSON::EncodingError)
+          expect { SmarterJSON.process_one(input, acceleration: acceleration) }.to raise_error(SmarterJSON::EncodingError)
         end
 
         it "SmarterJSON::EncodingError is a kind of ParseError" do
@@ -1515,7 +1749,8 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
       describe "out-of-scope values stay strings" do
         it "leaves a date string as a String (§3 row 22)" do
-          expect(SmarterJSON.process('"2025-01-31"', acceleration: acceleration)).to eq("2025-01-31")
+          expect(SmarterJSON.process('"2025-01-31"', acceleration: acceleration)).to eq(["2025-01-31"])
+          expect(SmarterJSON.process_one('"2025-01-31"', acceleration: acceleration)).to eq("2025-01-31")
         end
       end
     end

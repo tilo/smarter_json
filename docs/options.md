@@ -13,7 +13,7 @@
 
 ## Reading
 
-These options are passed to [`SmarterJSON.process`](./basic_read_api.md) and `SmarterJSON.process_file` as the second argument; anything you set overrides the defaults below.
+These options are passed to [`SmarterJSON.process`](./basic_read_api.md), `SmarterJSON.process_one`, and `SmarterJSON.process_file` as the second argument; anything you set overrides the defaults below.
 
 | Option            | Default      | Explanation                                                                                                            |
 |-------------------|--------------|------------------------------------------------------------------------------------------------------------------------|
@@ -25,20 +25,20 @@ These options are passed to [`SmarterJSON.process`](./basic_read_api.md) and `Sm
 | `:symbolize_keys` | `false`      | Return object keys as Symbols instead of Strings.                                                                      |
 
 ```ruby
-SmarterJSON.process('{"a": 1}', symbolize_keys: true)               # => {:a=>1}
-SmarterJSON.process('{"a":1,"a":2}', duplicate_key: :first_wins)    # => {"a"=>1}  (default keeps the 2)
-SmarterJSON.process(big_decimal_json, decimal_precision: :float)      # every number as Float (fastest)
-SmarterJSON.process("[1,,2]", on_warning: ->(w) { puts w })         # => [1, 2], and prints the warning
+SmarterJSON.process_one('{"a": 1}', symbolize_keys: true)               # => {:a=>1}
+SmarterJSON.process_one('{"a":1,"a":2}', duplicate_key: :first_wins)    # => {"a"=>1}  (default keeps the 2)
+SmarterJSON.process_one(big_decimal_json, decimal_precision: :float)      # every number as Float (fastest)
+SmarterJSON.process_one("[1,,2]", on_warning: ->(w) { puts w })         # => [1, 2], and prints the warning
 ```
 
 ### A note on `:on_warning`
 
-`smarter_json` is lenient by design — it salvages your data instead of rejecting the whole document over a stray comma. `on_warning:` keeps that, but also hands you a record of what it had to fix, so leniency is transparent rather than silent. It takes a callable that SmarterJSON invokes once per fix, passing a `SmarterJSON::Warning` (with `type` (a Symbol), `message`, `line`, and `col`). It never changes the return value — `process` still hands back the bare value — and it fires on every path, including the streaming block form. With no handler (the default), nothing is recorded and there is zero overhead.
+`smarter_json` is lenient by design — it salvages your data instead of rejecting the whole document over a stray comma. `on_warning:` keeps that, but also hands you a record of what it had to fix, so leniency is transparent rather than silent. It takes a callable that SmarterJSON invokes once per fix, passing a `SmarterJSON::Warning` (with `type` (a Symbol), `message`, `line`, and `col`). It never changes the return value — `process` still returns its `Array` of documents (and `process_one` its single value) — and it fires on every path, including the streaming block form. With no handler (the default), nothing is recorded and there is zero overhead.
 
 ```ruby
 warns = []
 result = SmarterJSON.process("[1,,2]", on_warning: ->(w) { warns << w })
-result                         # => [1, 2]
+result                         # => [[1, 2]]   (one document: the array [1, 2], with the empty slot collapsed)
 warns.map(&:type)              # => [:empty_slot]
 warns.first.to_s               # => "extra comma, collapsed an empty slot at line 1, col 4"
 ```

@@ -40,7 +40,7 @@ RSpec.describe "fuzz / property tests" do
   def random_string(rng)
     Array.new(rng.rand(0..8)) do
       cp = rng.rand(0x00..0x2fff)             # include control chars (force escaping) + multibyte
-      (0xd800..0xdfff).cover?(cp) ? 0x20 : cp # skip the UTF-16 surrogate range (not scalar values)
+      (0xd800..0xdfff).cover?(cp) ? 0x20 : cp # skip the UTF-16 stand-in range (not scalar values)
     end.pack("U*")
   end
 
@@ -81,7 +81,8 @@ RSpec.describe "fuzz / property tests" do
       json = JSON.generate(random_value(rng))
       ref  = JSON.parse(json)
       [true, false].each do |accel|
-        got = SmarterJSON.process(json, acceleration: accel, decimal_precision: :float)
+        expect(SmarterJSON.process(json, acceleration: accel, decimal_precision: :float)).to(eq([ref]), "process array-shape mismatch (accel=#{accel}) for #{json.inspect}\n seed=#{seed}")
+        got = SmarterJSON.process_one(json, acceleration: accel, decimal_precision: :float)
         expect(got).to(eq(ref), "mismatch (accel=#{accel}) for #{json.inspect}\n got: #{got.inspect}\n ref: #{ref.inspect}\n seed=#{seed}")
       end
     end
@@ -133,7 +134,8 @@ RSpec.describe "fuzz / property tests" do
       value = random_value(rng)
       json  = SmarterJSON.generate(value)
       [true, false].each do |accel|
-        got = SmarterJSON.process(json, acceleration: accel, decimal_precision: :float)
+        expect(SmarterJSON.process(json, acceleration: accel, decimal_precision: :float)).to(eq([value]), "process round-trip array-shape failed (accel=#{accel}) for #{value.inspect}\n seed=#{seed}")
+        got = SmarterJSON.process_one(json, acceleration: accel, decimal_precision: :float)
         expect(got).to(eq(value), "round-trip failed (accel=#{accel}) for #{value.inspect}\n json: #{json.inspect}\n got: #{got.inspect}\n seed=#{seed}")
       end
     end

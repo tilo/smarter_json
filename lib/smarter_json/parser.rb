@@ -12,14 +12,18 @@ module SmarterJSON
   # is always content, never a filename — use process_file for paths.) The values
   # in `options` override Parser::DEFAULT_OPTIONS.
   #
-  # Without a block: returns nil (zero documents), the value (one document), or an
-  # Array of the values (two or more — NDJSON / JSONL / concatenated / whitespace-
-  # separated). :acceleration (default true) selects the C extension when compiled
-  # and loaded (SmarterJSON::HAS_ACCELERATION); otherwise the pure-Ruby parser.
+  # Without a block: always returns an Array of the documents found — [] for none,
+  # [doc] for one, [d1, d2, …] for several (NDJSON / JSONL / concatenated). A
+  # top-level value must be a recognized JSON value (number / literal / quoted
+  # string / object / array) or an implicit-root object, else it raises. For the
+  # single-document case use SmarterJSON.process_one (returns the bare value).
+  # :acceleration (default true) selects the C extension when compiled and loaded
+  # (SmarterJSON::HAS_ACCELERATION); otherwise the pure-Ruby parser.
   #
-  # With a block: yields each top-level document as it is parsed, and returns nil.
-  # For an IO this streams document-by-document in bounded memory — it reads the
-  # stream as newline-delimited documents (NDJSON / JSONL), one per line.
+  # With a block: yields each top-level document as it is parsed, and returns the
+  # document count. For an IO this streams document-by-document in bounded memory —
+  # it reads the stream as newline-delimited documents (NDJSON / JSONL), one per
+  # line.
   def process(input, options = {}, &block)
     options = Options.process_options(options)
     if input.is_a?(String)
@@ -49,8 +53,44 @@ module SmarterJSON
     end
   end
 
-  # Parse a String of JSON content (the in-memory path). Returns nil (block) or
-  # the value / Array (no block); the C extension is used when available.
+  # SmarterJSON.process_one(input, options = {}) — the single-document accessor.
+  #
+  # Returns the first document's value (or nil when the input holds no documents).
+  # When the input holds MORE than one document it returns the first and warns once
+  # — it never raises, since an extra document is valid data; the warning goes to
+  # on_warning if set, else Rails.logger.warn when Rails is loaded, else Kernel#warn.
+  # For an IO this is bounded memory: it parses just the first document and stops as
+  # soon as a second is seen, instead of materialising the whole stream the way
+  # process(io).first would. (process(input).first and process(input)[0] silently
+  # drop documents 2+ — a footgun; use process_one instead.)
+  def process_one(input, options = {})
+    options = Options.process_options(options)
+
+    # IO: bounded memory — parse just the first document and stop once a second is
+    # seen (peek-to-warn). A String is already in memory, so use the plain no-block
+    # path: it returns the full (wrapper-recovered, de-duplicated) Array in one pass,
+    # which also avoids the reactive-recovery double-yield the block path would hit.
+    unless input.respond_to?(:read)
+      docs = process(input, options)
+      warn_extra_documents(options) if docs.length > 1
+      return docs.first
+    end
+
+    first = nil
+    count = 0
+    catch(:smarter_json_first_document) do
+      process(input, options) do |doc|
+        count += 1
+        first = doc if count == 1
+        throw(:smarter_json_first_document) if count > 1
+      end
+    end
+    warn_extra_documents(options) if count > 1
+    first
+  end
+
+  # Parse a String of JSON content (the in-memory path). Returns an Array of the
+  # documents found (empty for none); the C extension is used when available.
   def process_content(input, options, &block)
     if block
       if options.fetch(:acceleration, true) && HAS_ACCELERATION
@@ -68,11 +108,33 @@ module SmarterJSON
   # Stream documents from an IO incrementally, yielding each recovered top-level
   # document without slurping the whole input into memory first.
   def stream_io(io, options, &block)
-    Framer.each_document(io) { |doc| Recovery.process_string(doc, options, &block) }
-    nil
+    count = 0
+    Framer.each_document(io) do |doc|
+      # Recovery.process_string yields each value and returns how many it yielded;
+      # blank / comment-only framed segments yield none, so count tracks actual
+      # documents (== values yielded), not raw framed segments.
+      count += Recovery.process_string(doc, options, &block)
+    end
+    count
   end
 
-  private_class_method :process_content, :stream_io
+  # process_one's "more than one document" notice — routed to on_warning if the caller
+  # gave one, else Rails.logger when Rails is loaded, else Kernel#warn. Never silent,
+  # never raised.
+  def warn_extra_documents(options)
+    message = "SmarterJSON.process_one: input has more than one document — returning the first and " \
+              "dropping the rest. Use SmarterJSON.process to get every document."
+    handler = options[:on_warning]
+    if handler
+      handler.call(Warning.new(:extra_documents, message, nil, nil))
+    elsif defined?(Rails) && Rails.respond_to?(:logger) && Rails.logger
+      Rails.logger.warn(message)
+    else
+      Kernel.warn(message)
+    end
+  end
+
+  private_class_method :process_content, :stream_io, :warn_extra_documents
 
   # Named byte values, shared by the Parser FSM and the Framer / Recovery byte
   # scanners so none of them spell out raw hex. Included where needed.
@@ -387,15 +449,23 @@ module SmarterJSON
       handler = options[:on_warning]
       emit_wrapper_warnings(payloads, handler)
 
-      results = payloads.map do |payload|
-        SmarterJSON.send(:process_content, payload[:slice], options)
+      if block_given?
+        count = 0
+        payloads.each do |payload|
+          SmarterJSON.send(:process_content, payload[:slice], options) do |doc|
+            block.call(doc)
+            count += 1
+          end
+        end
+        return count
       end
 
-      return results.each(&block).then { nil } if block_given?
-      return nil if results.empty?
-      return results.first if results.length == 1
-
-      results
+      # Each payload's process_content now returns an Array of its documents; flatten
+      # so several recovered payloads yield one flat Array<doc> (the always-array
+      # contract), not an Array of Arrays.
+      payloads.flat_map do |payload|
+        SmarterJSON.send(:process_content, payload[:slice], options)
+      end
     end
 
     def emit_wrapper_warnings(payloads, handler)
@@ -648,17 +718,14 @@ module SmarterJSON
     # value. Commas do NOT separate documents (only whitespace / newline /
     # concatenation do), so a bracketless comma list still raises in parse_document.
     def parse
-      skip_whitespace_and_comments
-      return nil if eof?
+      results = []
+      loop do
+        skip_document_separators
+        break if eof?
 
-      value = parse_document
-      skip_whitespace_and_comments
-      return value if eof?
-
-      results = [value]
-      until eof?
-        results << parse_document
-        skip_whitespace_and_comments
+        value = parse_document
+        enforce_scalar_boundary(value)
+        results << value
       end
       results
     end
@@ -666,13 +733,17 @@ module SmarterJSON
     # Yield each top-level value until EOF (JSONL / NDJSON / concatenated /
     # whitespace-separated). Used by the block form of SmarterJSON.process.
     def each_value
+      count = 0
       loop do
-        skip_whitespace_and_comments
+        skip_document_separators
         break if eof?
 
-        yield parse_document
+        value = parse_document
+        enforce_scalar_boundary(value)
+        yield value
+        count += 1
       end
-      nil
+      count
     end
 
     private
@@ -681,6 +752,51 @@ module SmarterJSON
 
     def parse_document
       parse_iter(implicit_root_object_ahead?)
+    end
+
+    # Between top-level documents, whitespace, comments, AND commas all separate
+    # (commas collapse like the in-container lenient-comma rule). A space alone never
+    # separates — that is handled inside the document by the quoteless run, so
+    # `1 2 3` is one document (the string "1 2 3") while `1, 2, 3` is three.
+    def skip_document_separators
+      loop do
+        skip_whitespace_and_comments
+        break unless byte == COMMA
+
+        advance(1)
+      end
+    end
+
+    # After a top-level value: a self-delimiting value (object / array / quoted string)
+    # may be followed by anything (the next document self-delimits), but a bare scalar
+    # (number / keyword) must be followed by a real separator — a newline, ',', a
+    # comment, or EOF. A space is NOT a separator, so `1 2 3` and `42 "x" true` raise
+    # rather than silently splitting; bare top-level words raise in parse_value itself.
+    def enforce_scalar_boundary(value)
+      return if value.is_a?(String) || value.is_a?(Hash) || value.is_a?(Array)
+
+      skip_horizontal_whitespace
+      b = byte
+      return if b.nil? || b == LF || b == CR || b == COMMA
+      return if b == HASH || (b == SLASH && [SLASH, STAR].include?(byte_at(1)))
+
+      raise error("a top-level number or keyword must be followed by a newline, ',', or end of input")
+    end
+
+    # Skip horizontal whitespace only (space / tab / VT / FF) — NOT newlines, which are
+    # document separators. Used by the scalar-boundary check above.
+    def skip_horizontal_whitespace
+      loop do
+        b = byte
+        if [SPACE, TAB, 0x0B, 0x0C].include?(b)
+          advance(1)
+        elsif b && b >= 0x80 && (n = multibyte_ws_len(@pos)).positive?
+          @pos += n # multibyte horizontal whitespace (NBSP, U+2000–200A, …)
+          @col += 1
+        else
+          break
+        end
+      end
     end
 
     # Iterative container parser — explicit stack, NO Ruby recursion, so nesting
@@ -730,6 +846,11 @@ module SmarterJSON
             raise error("unexpected end of input")
             # :nocov:
           else
+            # Top-level scalar: must be a recognized JSON value (number / literal /
+            # quoted string). A bare word raises — there are no top-level quoteless
+            # strings (Decision 2 = B-broad). In-container quoteless still uses
+            # parse_member_value; the scalar-vs-separator boundary is enforced by the
+            # parse / each_value loop via enforce_scalar_boundary.
             return parse_value
           end
         elsif b == COMMA
@@ -1093,14 +1214,16 @@ module SmarterJSON
     end
 
     # Advance to the end of a quoteless run. Stops at structural punctuation
-    # (',' '}' ']'), a newline, EOF, or a comment marker that is preceded by
-    # whitespace. Spaces by themselves are not delimiters.
+    # (',' '{' '}' '[' ']' — openers terminate symmetrically with closers, so a
+    # self-delimiting value starts fresh: `localhost {"a":1}` -> ["localhost", {...}]),
+    # a newline, EOF, or a comment marker that is preceded by whitespace. Spaces by
+    # themselves are not delimiters.
     def scan_quoteless_run
       prev_ws = false
       loop do
         b = byte
         break if b.nil?
-        break if [COMMA, RBRACE, RBRACKET, LF, CR].include?(b)
+        break if [COMMA, RBRACE, RBRACKET, LBRACE, LBRACKET, LF, CR].include?(b)
         break if prev_ws && (b == HASH || (b == SLASH && [SLASH, STAR].include?(byte_at(1))))
 
         if b == SPACE || (b >= TAB && b <= CR) # tab/VT/FF/space (LF/CR already broke)

@@ -73,7 +73,8 @@ RSpec.describe "SmarterJSON.generate" do
   describe "round-trips with process" do
     it "process(generate(obj)) == obj for standard JSON" do
       obj = { "a" => 1, "b" => [2, "three", nil, true], "c" => { "d" => -4.5 } }
-      expect(SmarterJSON.process(SmarterJSON.generate(obj))).to eq(obj)
+      expect(SmarterJSON.process(SmarterJSON.generate(obj))).to eq([obj])
+      expect(SmarterJSON.process_one(SmarterJSON.generate(obj))).to eq(obj)
     end
 
     it "process(generate(arr, format: :ndjson)) == arr for NDJSON" do
@@ -145,7 +146,8 @@ RSpec.describe "SmarterJSON.generate" do
 
     it "round-trips: process(generate(obj, indent: 2)) == obj" do
       obj = { "a" => 1, "b" => [2, "three", nil, true], "c" => { "d" => -4.5 } }
-      expect(SmarterJSON.process(SmarterJSON.generate(obj, indent: 2))).to eq(obj)
+      expect(SmarterJSON.process(SmarterJSON.generate(obj, indent: 2))).to eq([obj])
+      expect(SmarterJSON.process_one(SmarterJSON.generate(obj, indent: 2))).to eq(obj)
     end
   end
 
@@ -159,7 +161,7 @@ RSpec.describe "SmarterJSON.generate" do
       expect(SmarterJSON.generate(e_acute, ascii_only: true)).to eq('"\u00e9"')
     end
 
-    it "escapes an astral (> U+FFFF) char as a UTF-16 surrogate pair" do
+    it "escapes an astral (> U+FFFF) char as a UTF-16 stand-in pair" do
       grinning = [0x1F600].pack("U") # 😀
       expect(SmarterJSON.generate(grinning, ascii_only: true)).to eq('"\ud83d\ude00"')
     end

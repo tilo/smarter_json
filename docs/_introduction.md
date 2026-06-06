@@ -21,21 +21,15 @@ Most JSON parsers reject anything that isn't perfectly strict JSON, and they mak
 
 * **One reader, no modes, no flags.** There is no `dialect:` option and no "strict mode" — `SmarterJSON.process(input)` accepts the whole superset, and strict JSON is simply the narrowest case. You don't configure the reader to match your input; it adapts to whatever you give it.
 
-* **It reads multi-document input automatically — a distinguishing feature.** `SmarterJSON.process` handles NDJSON / JSONL / concatenated JSON with **no block and no special method**: zero documents returns `nil`, one document returns its value, two or more return an `Array`. The same rule applies when wrapper noise is stripped and several payloads are recovered from one blob. **Only SmarterJSON reads multi-document input via plain `process` — Oj and the stdlib `json` library raise without a block.** For input larger than memory, pass a block to stream one document at a time. See [The Basic Read API](./basic_read_api.md).
+* **It reads multi-document input automatically — a distinguishing feature.** `SmarterJSON.process` handles NDJSON / JSONL / concatenated JSON with **no block and no special method**: it always returns an `Array` of the documents found (`[]` / `[doc]` / `[d1, d2, …]`). For the common single-document case, `SmarterJSON.process_one` returns the one value directly (and warns, never raises, if there was more than one). The same rule applies when wrapper noise is stripped and several payloads are recovered from one blob. **Only SmarterJSON reads multi-document input via plain `process` — Oj and the stdlib `json` library raise without a block.** For input larger than memory, pass a block to stream one document at a time. See [The Basic Read API](./basic_read_api.md).
 
-* **It's fast.** A C extension (with a pure-Ruby fallback that runs everywhere) puts it ahead of Oj on nearly every file we benchmark, and competitive with the stdlib `json` C parser. Floats are decoded with Ryū (correctly rounded, single-pass), so number-heavy data is fast and bit-exact.
+* **It's fast.** A C extension (with a pure-Ruby fallback that runs everywhere) puts it ahead of Oj on nearly every file we benchmark, and competitive with the stdlib `json` C parser. Floats are decoded with the **Eisel-Lemire** algorithm (fast_float), correctly rounded and bit-for-bit identical to `JSON.parse`, so number-heavy data is fast and exact.
 
 * **It writes JSON too.** `SmarterJSON.generate` turns Ruby values into strict, interoperable JSON — or into NDJSON, one element per line, the exact inverse of reading NDJSON back into an Array. See [The Basic Write API](./basic_write_api.md).
 
 ## What it accepts, beyond strict JSON
 
-* `//`, `/* … */`, and `#` comments (a `#`/`//` only starts a comment when preceded by whitespace, so `url: http://x.com` reads as a string, not a truncated value)
-* Trailing commas; unquoted keys (`{host: localhost}`); single-quoted, triple-quoted (`'''…'''`), and quoteless string values
-* Implicit root object — a config file that starts with `key: value`, no outer `{}`
-* `NaN`, `Infinity`, hex (`0xFF`), leading `+` / `.`, underscores in numbers (`1_000_000`)
-* UTF-8 BOM, smart/curly quotes, Python literals (`True` / `False` / `None`), JavaScript `undefined`
-* Mixed CR / LF / CRLF line endings, and any Ruby-supported input encoding (via `encoding:`)
-* Duplicate keys (last value wins by default; configurable — see [Configuration Options](./options.md))
+Comments (`//`, `/* … */`, `#` — a `#`/`//` only starts a comment when preceded by whitespace, so `url: http://x.com` reads as a string, not a truncated value), markdown-wrapped / chatty blobs around the payload, trailing commas, unquoted / single- / triple-quoted / quoteless strings, an implicit root object (`key: value`, no braces), `NaN` / `Infinity` / hex / underscored numbers, Python (`True` / `False` / `None`) and JavaScript (`undefined`) literals, smart quotes, a UTF-8 BOM, mixed CR / LF / CRLF line endings, any Ruby-supported input encoding (via `encoding:`), and duplicate keys. The full list — with the human-JSON spec references it's drawn from — is kept in one place: [**What it accepts, beyond strict JSON**](../README.md#what-it-accepts-beyond-strict-json) in the README.
 
 It raises only on genuinely unreadable input (unterminated string, mismatched bracket), with line and column in the message — never on valid-but-lenient input.
 

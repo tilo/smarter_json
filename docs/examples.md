@@ -13,6 +13,8 @@
 
 **Rescue from `SmarterJSON::Error` (recommended):** SmarterJSON raises only on genuinely unreadable input (an unterminated string, a mismatched bracket), with line and column in the message. Rescuing from `SmarterJSON::Error` lets your application handle bad input gracefully.
 
+**`process` vs `process_one`:** `SmarterJSON.process` is the preferred call — it always returns an `Array` of documents, so the count is explicit and you never silently drop one. `SmarterJSON.process_one` is the convenience for the single-document case: it returns that one document's value directly, and *warns* (never raises) if the input turned out to hold more than one. Both appear below; reach for `process` unless you specifically want the single value.
+
 ---
 
 1. [Read a JSON String](#example-1-read-a-json-string)
@@ -36,13 +38,14 @@
 ```ruby
 require "smarter_json"
 
-SmarterJSON.process('{"a": 1, "b": [2, 3]}')   # => {"a"=>1, "b"=>[2, 3]}
+SmarterJSON.process('{"a": 1, "b": [2, 3]}')       # => [{"a"=>1, "b"=>[2, 3]}]   (always an Array of documents)
+SmarterJSON.process_one('{"a": 1, "b": [2, 3]}')   # => {"a"=>1, "b"=>[2, 3]}     (the one document's value)
 ```
 
 ### Example 2: Read a JSON File
 
 ```ruby
-SmarterJSON.process_file("config.json")        # => the extracted data
+SmarterJSON.process_file("config.json")        # => an Array of documents (same return rules as process)
 ```
 
 `process_file` opens the file, reads it with the labeled [`encoding:`](./options.md) (default `"UTF-8"`), and processes it.
@@ -52,22 +55,29 @@ SmarterJSON.process_file("config.json")        # => the extracted data
 A config file that starts with `key: value` and has no outer `{}` is read as an object:
 
 ```ruby
-SmarterJSON.process("host: localhost\nport: 5432")   # => {"host"=>"localhost", "port"=>5432}
+SmarterJSON.process_one("host: localhost\nport: 5432")   # => {"host"=>"localhost", "port"=>5432}
 ```
 
 ### Example 4: Multiple Documents (NDJSON) → Array
 
-Plain `process` reads NDJSON / JSONL / concatenated documents with no block and no special method. Zero documents → `nil`, one → its value, two or more → an `Array`:
+Plain `process` reads NDJSON / JSONL / concatenated documents with no block and no special method, and always returns an `Array` — `[]` for none, `[doc]` for one, `[d1, d2, …]` for several:
 
 ```ruby
 SmarterJSON.process(%({"id":1}\n{"id":2}\n{"id":3}))   # => [{"id"=>1}, {"id"=>2}, {"id"=>3}]
-SmarterJSON.process('{"id":1}')                          # => {"id"=>1}
-SmarterJSON.process("")                                  # => nil
+SmarterJSON.process('{"id":1}')                          # => [{"id"=>1}]   (one document, still an Array)
+SmarterJSON.process("")                                  # => []            (zero documents)
+```
+
+For the single-document case, `process_one` returns the one value directly — and *warns* (never raises) if there was more than one:
+
+```ruby
+SmarterJSON.process_one('{"id":1}')   # => {"id"=>1}
+SmarterJSON.process_one("")           # => nil
 ```
 
 ### Example 5: Streaming a Large File with a Block
 
-For input larger than memory, pass a block. Each recovered document is yielded one at a time:
+For input larger than memory, pass a block. Each recovered document is yielded one at a time, and the method returns the **document count** instead of building an `Array`:
 
 ```ruby
 SmarterJSON.process_file("events.ndjson") { |event| EventJob.perform_async(event) }
@@ -76,7 +86,7 @@ SmarterJSON.process_file("events.ndjson") { |event| EventJob.perform_async(event
 ### Example 6: Symbolize Keys
 
 ```ruby
-SmarterJSON.process('{"a": 1, "b": 2}', symbolize_keys: true)   # => {:a=>1, :b=>2}
+SmarterJSON.process_one('{"a": 1, "b": 2}', symbolize_keys: true)   # => {:a=>1, :b=>2}
 ```
 
 ### Example 7: Duplicate Keys
@@ -84,8 +94,8 @@ SmarterJSON.process('{"a": 1, "b": 2}', symbolize_keys: true)   # => {:a=>1, :b=
 By default the last value wins. Pass `:first_wins` to keep the first instead (either way, the repeat is reported through [`on_warning`](./options.md)):
 
 ```ruby
-SmarterJSON.process('{"a":1,"a":2}')                          # => {"a"=>2}   (:last_wins, the default)
-SmarterJSON.process('{"a":1,"a":2}', duplicate_key: :first_wins)  # => {"a"=>1}
+SmarterJSON.process_one('{"a":1,"a":2}')                          # => {"a"=>2}   (:last_wins, the default)
+SmarterJSON.process_one('{"a":1,"a":2}', duplicate_key: :first_wins)  # => {"a"=>1}
 ```
 
 ### Example 8: High-Precision Numbers: BigDecimal vs Float
@@ -93,14 +103,14 @@ SmarterJSON.process('{"a":1,"a":2}', duplicate_key: :first_wins)  # => {"a"=>1}
 The default `:auto` keeps high-precision decimals as `BigDecimal` (matching Oj). Force `Float` for raw speed when you don't need the precision:
 
 ```ruby
-SmarterJSON.process("65.613616999999977")                        # => BigDecimal (:auto, the default)
-SmarterJSON.process("65.613616999999977", decimal_precision: :float)  # => 65.613616999999977 (a Float)
+SmarterJSON.process_one("65.613616999999977")                        # => BigDecimal (:auto, the default)
+SmarterJSON.process_one("65.613616999999977", decimal_precision: :float)  # => 65.613616999999977 (a Float)
 ```
 
 ### Example 9: Lenient Input: Comments, Trailing Commas, Unquoted Keys
 
 ```ruby
-SmarterJSON.process(<<~JSON)
+SmarterJSON.process_one(<<~JSON)
   {
     host: localhost,   # unquoted key, quoteless value, and a trailing comma
     port: 5432,
@@ -118,7 +128,7 @@ A `#`/`//` only starts a comment when preceded by whitespace, so `http://example
 #### Fenced payload
 
 ````ruby
-SmarterJSON.process(<<~TEXT)
+SmarterJSON.process_one(<<~TEXT)
   Here is the JSON:
 
   ```json
@@ -133,7 +143,7 @@ TEXT
 #### Prose before / after the payload
 
 ```ruby
-SmarterJSON.process(<<~TEXT)
+SmarterJSON.process_one(<<~TEXT)
   Here is the result:
 
   {
@@ -148,7 +158,7 @@ TEXT
 #### Wrapper tags
 
 ```ruby
-SmarterJSON.process("<json>{\"a\":1}</json>")
+SmarterJSON.process_one("<json>{\"a\":1}</json>")
 # => {"a"=>1}
 ```
 
@@ -184,7 +194,7 @@ SmarterJSON.generate([{ "id" => 1 }, { "id" => 2 }], format: :ndjson)   # => "{\
 
 ```ruby
 obj = { "a" => 1, "b" => [2, "three", nil, true] }
-SmarterJSON.process(SmarterJSON.generate(obj)) == obj   # => true
+SmarterJSON.process_one(SmarterJSON.generate(obj)) == obj   # => true
 ```
 
 ---------------

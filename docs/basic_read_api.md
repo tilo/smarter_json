@@ -18,14 +18,15 @@ Reading JSON has one entry point for content and one for files. Both accept the 
 ```ruby
 require "smarter_json"
 
-SmarterJSON.process('{"a": 1, "b": [2, 3]}')          # => {"a"=>1, "b"=>[2, 3]}
-SmarterJSON.process("host: localhost\nport: 5432")     # => {"host"=>"localhost", "port"=>5432}  (no braces needed)
+SmarterJSON.process('{"a": 1, "b": [2, 3]}')          # => [{"a"=>1, "b"=>[2, 3]}]   (always an Array of documents)
+SmarterJSON.process_one('{"a": 1, "b": [2, 3]}')      # => {"a"=>1, "b"=>[2, 3]}     (the single document's value)
+SmarterJSON.process_one("host: localhost\nport: 5432") # => {"host"=>"localhost", "port"=>5432}  (no braces needed)
 ```
 
-`process` is polymorphic: its first argument is **either a String of JSON content or an IO to read from**. A String is always treated as content, never as a filename — use `process_file` for paths. When the input wraps the payload in obvious markdown / prose / tags, `process` strips that wrapper first and then reads the recovered payload(s).
+`process` accepts **either a String of JSON content or an IO to read from** as its first argument. A String is always treated as content, never as a filename — use `process_file` for paths. When the input wraps the payload in obvious markdown / prose / tags, `process` strips that wrapper first and then reads the recovered payload(s).
 
 ````ruby
-SmarterJSON.process(<<~TEXT)
+SmarterJSON.process_one(<<~TEXT)
   Here is the JSON:
 
   ```json
@@ -36,7 +37,7 @@ SmarterJSON.process(<<~TEXT)
 TEXT
 # => {"a"=>1}
 
-SmarterJSON.process(<<~TEXT)
+SmarterJSON.process_one(<<~TEXT)
   Here is the result:
 
   {
@@ -62,17 +63,26 @@ SmarterJSON.process(io)         # an open IO (File, StringIO, socket, …) — r
 SmarterJSON.process(some_string) # JSON content
 ```
 
-### Return value depends on how many documents the input holds
+### `process` always returns an Array of documents
 
-This is the distinguishing feature: `process` reads multi-document input (NDJSON / JSONL / concatenated / whitespace-separated) automatically, with no block and no special method.
+This is the distinguishing feature: `process` reads multi-document input (NDJSON / JSONL / concatenated) automatically, with no block and no special method, and **always returns an `Array` of the documents** it found:
 
 ```ruby
-SmarterJSON.process("")                                 # => nil          (zero documents)
-SmarterJSON.process('{"id":1}')                          # => {"id"=>1}    (one document → the value itself)
-SmarterJSON.process(%({"id":1}\n{"id":2}\n{"id":3}))     # => [{"id"=>1}, {"id"=>2}, {"id"=>3}]  (two or more → an Array)
+SmarterJSON.process("")                                 # => []            (zero documents)
+SmarterJSON.process('{"id":1}')                          # => [{"id"=>1}]   (one document, still an Array)
+SmarterJSON.process(%({"id":1}\n{"id":2}\n{"id":3}))     # => [{"id"=>1}, {"id"=>2}, {"id"=>3}]
 ```
 
-Documents are separated by whitespace, newlines, or simple concatenation — **not** by commas (a comma between top-level documents would be read as an implicit root array, which is not supported). If wrapper noise is stripped and several payloads are recovered, they are returned by the same rule: one payload → its value, several → an `Array`. Only SmarterJSON reads this via plain `process`: Oj and the stdlib `json` library raise without a block.
+For the common single-document case, **`process_one`** returns the one value directly — and *warns* (never raises) if there was more than one, so a stray extra document is never dropped silently:
+
+```ruby
+SmarterJSON.process_one('{"id":1}')   # => {"id"=>1}
+SmarterJSON.process_one("")           # => nil
+```
+
+> Type-checking the result? Use `result.is_a?(Array)`, not `result.class == Array` — idiomatic, and future-proof if the return ever becomes a specialized `Array` subclass.
+
+Documents are separated by **newlines, commas, RS (0x1E), or simple concatenation (self-delimiting values)** — **never by a space**. A top-level value must be a recognized JSON value (number / `true` / `false` / `null` / quoted string / object / array) or an implicit-root object (`host: localhost`); a bare top-level run such as `localhost` or `1 2 3` raises `ParseError`. (Quoteless string values *inside* objects and arrays are unchanged.) If wrapper noise is stripped and several payloads are recovered, they come back by the same rule — an `Array` of payloads (`process_one` returns the first). Only SmarterJSON reads multi-document input via plain `process`: Oj and the stdlib `json` library raise without a block.
 
 ## `SmarterJSON.process_file` — read a file by path
 
@@ -84,7 +94,7 @@ SmarterJSON.process_file("config.json5")     # read the file, then process — s
 
 ## Streaming with a block (bounded memory)
 
-For input larger than memory, pass a block. Each recovered top-level document is yielded as it is framed, and the method returns `nil` instead of collecting the documents into an Array. Both `process` and `process_file` forward the block.
+For input larger than memory, pass a block. Each recovered top-level document is yielded as it is framed, and the method returns the **document count** instead of collecting the documents into an Array. Both `process` and `process_file` forward the block.
 
 ```ruby
 SmarterJSON.process_file("events.ndjson") { |event| EventJob.perform_async(event) }
@@ -104,7 +114,7 @@ By default (`acceleration: true`) the C extension is used when it is compiled an
 ```ruby
 warns = []
 result = SmarterJSON.process("[1,,2]", on_warning: ->(w) { warns << w })
-result            # => [1, 2]
+result            # => [[1, 2]]   (one document: the array [1, 2] with the empty slot collapsed; process always returns an Array of documents)
 warns.map(&:type) # => [:empty_slot]
 warns.first.to_s  # => "extra comma, collapsed an empty slot at line 1, col 4"
 ```

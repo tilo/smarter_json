@@ -23,8 +23,12 @@ RSpec.describe "LLM-style input recovery" do
             ```
           TEXT
 
-          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: handler)).to eq({ "name" => "Tilo", "active" => true })
+          expect(SmarterJSON.process_one(input, acceleration: acceleration, on_warning: handler)).to eq({ "name" => "Tilo", "active" => true })
           expect(warns.map(&:type)).to eq([:code_fence_stripped])
+
+          w2, h2 = collect
+          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: h2)).to eq([{ "name" => "Tilo", "active" => true }])
+          expect(w2.map(&:type)).to eq([:code_fence_stripped])
         end
 
         it "strips bare markdown code fences too, even when the fence is not tagged as json" do
@@ -38,8 +42,12 @@ RSpec.describe "LLM-style input recovery" do
             ```
           TEXT
 
-          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: handler)).to eq({ "name" => "Tilo", "active" => true })
+          expect(SmarterJSON.process_one(input, acceleration: acceleration, on_warning: handler)).to eq({ "name" => "Tilo", "active" => true })
           expect(warns.map(&:type)).to eq([:code_fence_stripped])
+
+          w2, h2 = collect
+          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: h2)).to eq([{ "name" => "Tilo", "active" => true }])
+          expect(w2.map(&:type)).to eq([:code_fence_stripped])
         end
 
         it "ignores chatty prefix prose before a plain payload and emits a prefix_text_ignored warning" do
@@ -53,8 +61,12 @@ RSpec.describe "LLM-style input recovery" do
             }
           TEXT
 
-          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: handler)).to eq({ "name" => "Tilo", "score" => 42 })
+          expect(SmarterJSON.process_one(input, acceleration: acceleration, on_warning: handler)).to eq({ "name" => "Tilo", "score" => 42 })
           expect(warns.map(&:type)).to eq([:prefix_text_ignored])
+
+          w2, h2 = collect
+          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: h2)).to eq([{ "name" => "Tilo", "score" => 42 }])
+          expect(w2.map(&:type)).to eq([:prefix_text_ignored])
         end
 
         it "ignores explanatory suffix prose after a plain payload and emits a suffix_text_ignored warning" do
@@ -68,8 +80,12 @@ RSpec.describe "LLM-style input recovery" do
             This means the user is active.
           TEXT
 
-          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: handler)).to eq({ "name" => "Tilo", "active" => true })
+          expect(SmarterJSON.process_one(input, acceleration: acceleration, on_warning: handler)).to eq({ "name" => "Tilo", "active" => true })
           expect(warns.map(&:type)).to eq([:suffix_text_ignored])
+
+          w2, h2 = collect
+          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: h2)).to eq([{ "name" => "Tilo", "active" => true }])
+          expect(w2.map(&:type)).to eq([:suffix_text_ignored])
         end
 
         it "ignores chatty prefix and suffix prose around a fenced payload and emits specific warnings in order" do
@@ -87,7 +103,7 @@ RSpec.describe "LLM-style input recovery" do
             Let me know if you want YAML instead.
           TEXT
 
-          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: handler)).to eq({ "user" => "tilo", "admin" => false })
+          expect(SmarterJSON.process_one(input, acceleration: acceleration, on_warning: handler)).to eq({ "user" => "tilo", "admin" => false })
           expect(warns.map(&:type)).to eq(%i[prefix_text_ignored code_fence_stripped suffix_text_ignored])
           messages = [
             "ignored non-JSON text before the payload",
@@ -96,6 +112,10 @@ RSpec.describe "LLM-style input recovery" do
           ]
           expect(warns.map(&:message)).to eq(messages)
           expect(warns.map { |w| [w.line, w.col] }).to eq([[4, 1], [4, 1], [4, 1]])
+
+          w2, h2 = collect
+          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: h2)).to eq([{ "user" => "tilo", "admin" => false }])
+          expect(w2.map(&:type)).to eq(%i[prefix_text_ignored code_fence_stripped suffix_text_ignored])
         end
 
         it "extracts an inline payload after a same-line label like JSON: and ignores the label" do
@@ -104,8 +124,12 @@ RSpec.describe "LLM-style input recovery" do
             JSON: {"a": 1, "b": 2}
           TEXT
 
-          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: handler)).to eq({ "a" => 1, "b" => 2 })
+          expect(SmarterJSON.process_one(input, acceleration: acceleration, on_warning: handler)).to eq({ "a" => 1, "b" => 2 })
           expect(warns.map(&:type)).to eq([:prefix_text_ignored])
+
+          w2, h2 = collect
+          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: h2)).to eq([{ "a" => 1, "b" => 2 }])
+          expect(w2.map(&:type)).to eq([:prefix_text_ignored])
         end
 
         it "extracts an inline payload after prose like Final answer: and ignores the prefix" do
@@ -114,8 +138,12 @@ RSpec.describe "LLM-style input recovery" do
             Final answer: {foo: 1, bar: 2}
           TEXT
 
-          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: handler)).to eq({ "foo" => 1, "bar" => 2 })
+          expect(SmarterJSON.process_one(input, acceleration: acceleration, on_warning: handler)).to eq({ "foo" => 1, "bar" => 2 })
           expect(warns.map(&:type)).to eq([:prefix_text_ignored])
+
+          w2, h2 = collect
+          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: h2)).to eq([{ "foo" => 1, "bar" => 2 }])
+          expect(w2.map(&:type)).to eq([:prefix_text_ignored])
         end
 
         it "extracts the JSON payload from XML-ish wrapper tags and emits a wrapper_tag_stripped warning" do
@@ -128,8 +156,12 @@ RSpec.describe "LLM-style input recovery" do
             </json>
           TEXT
 
-          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: handler)).to eq({ "id" => 123 })
+          expect(SmarterJSON.process_one(input, acceleration: acceleration, on_warning: handler)).to eq({ "id" => 123 })
           expect(warns.map(&:type)).to eq([:wrapper_tag_stripped])
+
+          w2, h2 = collect
+          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: h2)).to eq([{ "id" => 123 }])
+          expect(w2.map(&:type)).to eq([:wrapper_tag_stripped])
         end
 
         it "extracts the payload from BEGIN_JSON / END_JSON wrappers too" do
@@ -142,8 +174,12 @@ RSpec.describe "LLM-style input recovery" do
             END_JSON
           TEXT
 
-          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: handler)).to eq({ "id" => 123 })
+          expect(SmarterJSON.process_one(input, acceleration: acceleration, on_warning: handler)).to eq({ "id" => 123 })
           expect(warns.map(&:type)).to eq([:wrapper_tag_stripped])
+
+          w2, h2 = collect
+          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: h2)).to eq([{ "id" => 123 }])
+          expect(w2.map(&:type)).to eq([:wrapper_tag_stripped])
         end
 
         it "handles a realistic LLM blob with prose, code fences, JSON5-ish syntax, and trailing chatter" do
@@ -162,12 +198,16 @@ RSpec.describe "LLM-style input recovery" do
             Hope this helps.
           TEXT
 
-          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: handler)).to eq({
-                                                                                                      "user" => "tilo",
-                                                                                                      "active" => true,
-                                                                                                      "tags" => ["a", "b"]
-                                                                                                    })
+          expect(SmarterJSON.process_one(input, acceleration: acceleration, on_warning: handler)).to eq({
+                                                                                                          "user" => "tilo",
+                                                                                                          "active" => true,
+                                                                                                          "tags" => ["a", "b"]
+                                                                                                        })
           expect(warns.map(&:type)).to include(:prefix_text_ignored, :code_fence_stripped, :suffix_text_ignored)
+
+          w2, h2 = collect
+          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: h2)).to eq([{ "user" => "tilo", "active" => true, "tags" => ["a", "b"] }])
+          expect(w2.map(&:type)).to include(:prefix_text_ignored, :code_fence_stripped, :suffix_text_ignored)
         end
 
         it "returns all recovered payloads when prose surrounds multiple candidate payloads" do
@@ -202,6 +242,7 @@ RSpec.describe "LLM-style input recovery" do
           TEXT
 
           expect { SmarterJSON.process(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated|end of input/i)
+          expect { SmarterJSON.process_one(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated|end of input/i)
         end
 
         it "raises on a truncated array" do
@@ -213,6 +254,7 @@ RSpec.describe "LLM-style input recovery" do
           TEXT
 
           expect { SmarterJSON.process(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated|end of input/i)
+          expect { SmarterJSON.process_one(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated|end of input/i)
         end
 
         it "raises on a trailing incomplete key" do
@@ -221,6 +263,7 @@ RSpec.describe "LLM-style input recovery" do
           TEXT
 
           expect { SmarterJSON.process(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /expected ':'|unterminated|end of input/i)
+          expect { SmarterJSON.process_one(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /expected ':'|unterminated|end of input/i)
         end
 
         it "raises on a trailing key whose colon is present but whose value never arrived" do
@@ -229,6 +272,7 @@ RSpec.describe "LLM-style input recovery" do
           TEXT
 
           expect { SmarterJSON.process(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated|end of input/i)
+          expect { SmarterJSON.process_one(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated|end of input/i)
         end
 
         it "raises when truncation happens inside a nested object" do
@@ -237,6 +281,7 @@ RSpec.describe "LLM-style input recovery" do
           TEXT
 
           expect { SmarterJSON.process(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated|end of input/i)
+          expect { SmarterJSON.process_one(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated|end of input/i)
         end
 
         it "raises on an incomplete trailing string value" do
@@ -245,6 +290,7 @@ RSpec.describe "LLM-style input recovery" do
           TEXT
 
           expect { SmarterJSON.process(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated/i)
+          expect { SmarterJSON.process_one(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated/i)
         end
 
         it "raises on an array with a trailing comma at EOF" do
@@ -253,6 +299,7 @@ RSpec.describe "LLM-style input recovery" do
           TEXT
 
           expect { SmarterJSON.process(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated|end of input/i)
+          expect { SmarterJSON.process_one(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated|end of input/i)
         end
 
         it "raises on an incomplete trailing string element from an array" do
@@ -261,6 +308,7 @@ RSpec.describe "LLM-style input recovery" do
           TEXT
 
           expect { SmarterJSON.process(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated/i)
+          expect { SmarterJSON.process_one(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated/i)
         end
 
         it "raises when an array tail is truncated inside a nested object" do
@@ -269,6 +317,7 @@ RSpec.describe "LLM-style input recovery" do
           TEXT
 
           expect { SmarterJSON.process(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated|end of input/i)
+          expect { SmarterJSON.process_one(input, acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated|end of input/i)
         end
       end
 
@@ -292,7 +341,7 @@ RSpec.describe "LLM-style input recovery" do
                                { "id" => 1, "name" => "a" },
                                { "id" => 2, "name" => "b" }
                              ])
-          expect(rv).to be_nil
+          expect(rv).to eq(docs.length) # block form returns the document count
         end
 
         it "streams pretty-printed multi-line documents with CRLF separators too" do
@@ -304,7 +353,7 @@ RSpec.describe "LLM-style input recovery" do
                                { "id" => 1, "name" => "a" },
                                { "id" => 2, "name" => "b" }
                              ])
-          expect(rv).to be_nil
+          expect(rv).to eq(docs.length) # block form returns the document count
         end
 
         it "streams pretty-printed documents with comment-only separators between them" do
@@ -329,7 +378,7 @@ RSpec.describe "LLM-style input recovery" do
                                { "id" => 1, "name" => "a" },
                                { "id" => 2, "name" => "b" }
                              ])
-          expect(rv).to be_nil
+          expect(rv).to eq(docs.length) # block form returns the document count
         end
 
         it "streams top-level pretty-printed arrays as whole documents too" do
@@ -352,7 +401,7 @@ RSpec.describe "LLM-style input recovery" do
                                [1, 2, 3],
                                [4, 5]
                              ])
-          expect(rv).to be_nil
+          expect(rv).to eq(docs.length) # block form returns the document count
         end
 
         it "streams a mix of pretty-printed multi-line and single-line documents" do
@@ -375,7 +424,7 @@ RSpec.describe "LLM-style input recovery" do
                                { "id" => 2, "name" => "b" },
                                { "id" => 3, "name" => "c" }
                              ])
-          expect(rv).to be_nil
+          expect(rv).to eq(docs.length) # block form returns the document count
         end
       end
 
@@ -438,13 +487,15 @@ RSpec.describe "LLM-style input recovery" do
       describe "wrapper warnings reflect actual stripping, not markers inside the payload" do
         it "does not emit code_fence_stripped when ``` appears only inside a string value of a complete payload" do
           warns, handler = collect
-          expect(SmarterJSON.process('{"code":"```"}', acceleration: acceleration, on_warning: handler)).to eq({ "code" => "```" })
+          expect(SmarterJSON.process_one('{"code":"```"}', acceleration: acceleration, on_warning: handler)).to eq({ "code" => "```" })
+          expect(SmarterJSON.process('{"code":"```"}', acceleration: acceleration, on_warning: handler)).to eq([{ "code" => "```" }])
           expect(warns).to be_empty
         end
 
         it "does not emit wrapper_tag_stripped when <json> appears only inside a string value of a complete payload" do
           warns, handler = collect
-          expect(SmarterJSON.process('{"note":"see <json> here"}', acceleration: acceleration, on_warning: handler)).to eq({ "note" => "see <json> here" })
+          expect(SmarterJSON.process_one('{"note":"see <json> here"}', acceleration: acceleration, on_warning: handler)).to eq({ "note" => "see <json> here" })
+          expect(SmarterJSON.process('{"note":"see <json> here"}', acceleration: acceleration, on_warning: handler)).to eq([{ "note" => "see <json> here" }])
           expect(warns).to be_empty
         end
       end
@@ -458,7 +509,8 @@ RSpec.describe "LLM-style input recovery" do
         it "does not invoke wrapper recovery when ``` / <json> appear only inside string values" do
           input = '{"commit":"see ``` fenced ``` and a <json> tag in the message"}'
           expect(SmarterJSON::Recovery).not_to receive(:extract_payloads)
-          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq({ "commit" => "see ``` fenced ``` and a <json> tag in the message" })
+          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{ "commit" => "see ``` fenced ``` and a <json> tag in the message" }])
+          expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "commit" => "see ``` fenced ``` and a <json> tag in the message" })
         end
 
         it "does not invoke wrapper recovery for concatenated documents whose strings contain ```" do
@@ -470,7 +522,7 @@ RSpec.describe "LLM-style input recovery" do
         it "still recovers a genuinely fenced payload through the parse-then-recover path" do
           warns, handler = collect
           input = "```json\n{\"a\":1}\n```\n"
-          expect(SmarterJSON.process(input, acceleration: acceleration, on_warning: handler)).to eq({ "a" => 1 })
+          expect(SmarterJSON.process_one(input, acceleration: acceleration, on_warning: handler)).to eq({ "a" => 1 })
           expect(warns.map(&:type)).to eq([:code_fence_stripped])
         end
       end

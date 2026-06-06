@@ -3,6 +3,12 @@
 
 > 🚧 Getting ready for the 1.0.0 release - sorry for the interface changes - thank you for your patience! 🚧
 
+## 0.9.7 (2026-06-05 unreleased)
+- **Breaking: `process` / `process_file` now always return an `Array` of documents** — `[]` for none, `[doc]` for one, `[d1, d2, …]` for several. (Previously polymorphic: `nil` / the value / an `Array`.) The document count is now unambiguous, and any result can be iterated uniformly.
+- **New `SmarterJSON.process_one(input)`** — the single-document accessor for the common case: returns the one document's value (or `nil`), and *warns* (never raises) if the input held more than one. Takes a String or an IO; for an IO it is bounded-memory (parses just the first document). Reaching for `.first` / `[0]` on a `process` result silently drops extra documents — use `process_one` instead.
+- The **block form now returns the document count** (was `nil`): `n = SmarterJSON.process(io) { |doc| ... }`.
+- **The top level is stricter, which keeps the LLM-wrapper recovery working:** a top-level value must be a recognized JSON value (number / `true` / `false` / `null` / quoted string / object / array) or an implicit-root object (`host: localhost`). A bare top-level run — `localhost`, `1 2 3`, the typo `flase` — now raises `ParseError` instead of becoming a quoteless string. A space is never a document separator (`1 2 3` raises rather than splitting into three). In-container quoteless strings (`[red green blue]`, `host: localhost`) are unchanged.
+
 ## 0.9.6 (2026-06-04 unreleased)
 - Faster `decimal_precision: :float` parsing of full-precision decimal numbers (around 17–18 significant digits — e.g. coordinate data and scientific output). Parsed values are unchanged: still correctly rounded, bit-for-bit identical to `JSON.parse`.
 

@@ -51,7 +51,7 @@ Three things set it apart:
 
 1. **One tool, no modes, no flags.** There is no `dialect:` option and no "strict mode" — `SmarterJSON.process(input)` accepts the whole superset, and strict JSON is simply the narrowest case. You don't configure it to match your input; it adapts to whatever you give it.
 
-2. **It extracts every document from multi-document input automatically — a distinguishing feature.** `SmarterJSON.process` handles NDJSON / JSONL / concatenated JSON with **no block and no special method**: one document returns its value, several documents return an `Array`, empty input returns `nil`. The same rule applies when wrapper noise is stripped and several payloads are recovered from one blob. **Only SmarterJSON reads multi-document input via plain `process` — Oj and the stdlib `json` library raise without a block.** For input larger than memory, pass a block to stream one document at a time.
+2. **It extracts every document from multi-document input automatically — a distinguishing feature.** `SmarterJSON.process` handles NDJSON / JSONL / concatenated JSON with **no block and no special method**: it always returns an `Array` of the documents found (`[]` / `[doc]` / `[d1, d2, …]`). For the common single-document case, `SmarterJSON.process_one` returns the one value directly (and warns, never raises, if there was more than one). The same rule applies when wrapper noise is stripped and several payloads are recovered from one blob. **Only SmarterJSON reads multi-document input via plain `process` — Oj and the stdlib `json` library raise without a block.** For input larger than memory, pass a block to stream one document at a time.
 
 3. **It's fast.** A C extension (with a pure-Ruby fallback that runs everywhere) puts it ahead of Oj on nearly every file we benchmark, and competitive with the stdlib `json` C parser — among the fastest general-purpose JSON processors in Ruby.
 
@@ -67,6 +67,18 @@ Three things set it apart:
 - Duplicate keys (last value wins by default; configurable)
 
 It raises only on genuinely unreadable input (unterminated string, mismatched bracket), with line and column in the message — never on valid-but-lenient input.
+
+### Format references
+
+The lenient grammar is a superset of these human-JSON specs — listed once, here:
+
+* [JSON5](https://json5.org/)
+* [HJSON](https://hjson.github.io/)
+* [JWCC / HuJSON](https://github.com/tailscale/hujson)
+* [Nigel Tao](https://nigeltao.github.io/blog/2021/json-with-commas-comments.html)
+* [JSONH](https://github.com/jsonh-org/Jsonh)
+* [JSONC (VS Code)](https://jsonc.org/)
+* [NDJSON / JSON Text Sequences (RFC 7464)](https://datatracker.ietf.org/doc/html/rfc7464).
 
 ## Installation
 
@@ -88,9 +100,12 @@ Pass a String of JSON content or an IO; you get back the extracted data. The sam
 ```ruby
 require "smarter_json"
 
-SmarterJSON.process('{"a": 1, "b": [2, 3]}')   # => {"a"=>1, "b"=>[2, 3]}
-SmarterJSON.process_file("config.json5")        # read a file, then process
+SmarterJSON.process('{"a": 1, "b": [2, 3]}')       # => [{"a"=>1, "b"=>[2, 3]}]   (always an Array of documents)
+SmarterJSON.process_one('{"a": 1, "b": [2, 3]}')   # => {"a"=>1, "b"=>[2, 3]}     (the one document's value)
+SmarterJSON.process_file("config.json5")            # read a file, then process
 ```
+
+**Prefer `process`.** It always returns an `Array`, so the document count is explicit and you never silently drop one. Reach for `process_one` when you want just the single document's value — it *warns* (never raises) if the input turns out to hold more than one, so an unexpected extra document is surfaced, not dropped.
 
 ## Usage in APIs
 
@@ -115,7 +130,7 @@ See [Examples](#examples) below for multi-document input, streaming, and recover
 
 ## Stable interface & thread safety
 
-The public interface is now considered stable: `SmarterJSON.process`, `SmarterJSON.process_file`, `SmarterJSON.generate`, and the documented options in this README/docs are the supported surface.
+The public interface is now considered stable: `SmarterJSON.process`, `SmarterJSON.process_one`, `SmarterJSON.process_file`, `SmarterJSON.generate`, and the documented options in this README/docs are the supported surface.
 
 Concurrent calls are safe. The processor and generator keep per-call state local, and the C extension only caches Ruby IDs / constants at load time; it does not share mutable state across calls.
 
@@ -191,23 +206,34 @@ In short: **faster than Oj/strict nearly everywhere, far faster than Yajl, ahead
 No outer braces needed — a file or string that starts with `key: value` is read as an implicit root object (HJSON-style):
 
 ```ruby
-SmarterJSON.process("host: localhost\nport: 5432")
+SmarterJSON.process_one("host: localhost\nport: 5432")
 # => {"host"=>"localhost", "port"=>5432}
 ```
 
 ### Multiple documents (NDJSON / JSONL / concatenated)
 
-`process` detects how many top-level documents the input holds — **no block and no special method**. Zero documents returns `nil`, one returns the value itself, two or more return an `Array`:
+`process` always returns an **`Array` of the documents** it found — `[]` for none, `[doc]` for one, `[d1, d2, …]` for several — with **no block and no special method**. The document count is unambiguous, and any result iterates uniformly:
 
 ```ruby
 SmarterJSON.process(%({"id":1}\n{"id":2}\n{"id":3}))   # => [{"id"=>1}, {"id"=>2}, {"id"=>3}]
-SmarterJSON.process('{"id":1}')                         # => {"id"=>1}   (one document)
-SmarterJSON.process("")                                 # => nil          (zero documents)
+SmarterJSON.process('{"id":1}')                         # => [{"id"=>1}]   (one document, still an Array)
+SmarterJSON.process("")                                 # => []            (zero documents)
 ```
+
+For the common single-document case, **`process_one`** returns the one value directly — and *warns* (never raises) if the input held more than one, so you never silently drop a document:
+
+```ruby
+SmarterJSON.process_one('{"id":1}')   # => {"id"=>1}
+SmarterJSON.process_one("")           # => nil
+```
+
+> **Type-checking the result?** Use `result.is_a?(Array)`, not `result.class == Array` — it's the idiomatic Ruby test, and it stays correct if a future release returns a specialized `Array` subclass.
+
+A **top-level** value must be recognized JSON — a number, `true` / `false` / `null`, a quoted string, an object, an array — or an implicit-root object (`host: localhost`). A bare top-level run such as `localhost` or `1 2 3` raises `ParseError`. Quoteless string values *inside* objects and arrays (`{host: localhost}`, `[red green blue]`) are unchanged.
 
 ### Streaming large input with a block
 
-For input larger than memory, pass a block: each document is yielded as it is read and the method returns `nil` instead of building an `Array`. Both `process` and `process_file` forward the block:
+For input larger than memory, pass a block: each document is yielded as it is read and the method returns the **document count** instead of building an `Array`. Both `process` and `process_file` forward the block:
 
 ```ruby
 SmarterJSON.process_file("events.ndjson") { |event| EventJob.perform_async(event) }
@@ -215,12 +241,12 @@ SmarterJSON.process_file("events.ndjson") { |event| EventJob.perform_async(event
 
 ### Recovering JSON from LLM / markdown noise
 
-When the payload is wrapped in markdown fences, surrounding prose, or tags, `process` strips the wrapper and reads what's inside. (Clean JSON never pays for this — recovery only runs when a straight read fails.)
+When the payload is wrapped in markdown fences, surrounding prose, or tags, `process` (or `process_one` for a single payload) strips the wrapper and reads what's inside. (Clean JSON never pays for this — recovery only runs when a straight read fails.)
 
 A fenced code block, as an LLM often returns:
 
 ````ruby
-SmarterJSON.process(<<~TEXT)
+SmarterJSON.process_one(<<~TEXT)
   Here is the JSON:
 
   ```json
@@ -233,7 +259,7 @@ TEXT
 Explanatory prose before and/or after the payload is ignored:
 
 ```ruby
-SmarterJSON.process(<<~TEXT)
+SmarterJSON.process_one(<<~TEXT)
   Here is the result:
 
   { "a": 1 }
@@ -246,7 +272,7 @@ TEXT
 `<json>...</json>` / `BEGIN_JSON ... END_JSON` wrapper tags are unwrapped:
 
 ```ruby
-SmarterJSON.process('<json>{"a":1}</json>')
+SmarterJSON.process_one('<json>{"a":1}</json>')
 # => {"a"=>1}
 ```
 
@@ -272,17 +298,6 @@ TEXT
 Both the C extension and the pure-Ruby engine are **iterative, not recursive** — they track nesting on an explicit, heap-allocated stack rather than the call stack. So deeply nested input **cannot overflow the call stack or segfault**: nesting is bounded only by available memory, the same posture as Oj (which also ships no nesting limit; the stdlib `json` caps at 100). The `deeply_nested.json` benchmark (212 MB of nesting) is handled without issue.
 
 The trade-off: there is currently **no fixed nesting or input-size limit**, so extremely large or adversarially-nested untrusted input is bounded by memory (it can exhaust RAM), not by a crash. If you process untrusted input and want a hard cap, that's a planned opt-in guard — for now, size-limit upstream.
-
-
-## Format references
-
-* [JSON5](https://json5.org/)
-* [HJSON](https://hjson.github.io/)
-* [JWCC / HuJSON](https://github.com/tailscale/hujson)
-* [Nigel Tao](https://nigeltao.github.io/blog/2021/json-with-commas-comments.html)
-* [JSONH](https://github.com/jsonh-org/Jsonh)
-* [JSONC (VS Code)](https://jsonc.org/)
-* [NDJSON / JSON Text Sequences (RFC 7464)](https://datatracker.ietf.org/doc/html/rfc7464).
 
 
 ## Development

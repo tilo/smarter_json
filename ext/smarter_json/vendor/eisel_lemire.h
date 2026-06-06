@@ -15,10 +15,8 @@
  *
  * smarter_json uses it as THE decimal->double path for mantissas up to 18 digits
  * (everything wider / overflowed / with an extreme exponent goes to the strtod
- * round-to-odd fallback). It replaced the previous Ryū s2d fast path entirely:
- * Eisel-Lemire is correct past 17 digits (the old vendored ruby/json Ryū
- * s2d_from_parts was a deliberate <=17 fast path whose single mulShift64 drops the
- * round-to-even tie bits beyond that) and is also faster on the <=17 common case.
+ * round-to-odd fallback). It is correctly-rounded across that whole range, with no
+ * round-to-even tie loss, and is fast on the common short-mantissa case.
  * Verified bit-for-bit vs JSON.parse. See eisel_lemire.md for provenance. */
 #ifndef FJ_EISEL_LEMIRE_H
 #define FJ_EISEL_LEMIRE_H

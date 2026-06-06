@@ -580,14 +580,12 @@ static VALUE fj_float_strtod(const char *p, long n) {
 
 /* e10 is the final base-10 exponent (already adjusted by the fraction length). */
 static FJ_ALWAYS_INLINE VALUE fj_float_from_parts(uint64_t m10, int m10digits, int64_t e10, int neg, int overflow, const char *p, long n) {
-  /* Fast paths, by mantissa width (our scanner accumulates m10 exactly up to 18
+  /* Fast path by mantissa width (our scanner accumulates m10 exactly up to 18
      digits, flagging overflow beyond):
-       <=17 digits -> Ryū (this vendored Ryū s2d is correct only to 17; its single
-                      mulShift64 loses the round-to-even tie bits past that).
-       ==18 digits -> Eisel-Lemire, correctly-rounded with no fallback for any exact
-                      uint64 mantissa (Mushtak-Lemire). This pulls full-double-
-                      precision data (e.g. citylots coordinates, 18 sig digits) off
-                      the slow strtod fallback — the stdlib json gem still strtods it.
+       1..18 digits -> Eisel-Lemire, correctly-rounded for any exact uint64 mantissa
+                       (Mushtak-Lemire). This pulls full-double-precision data (e.g.
+                       citylots coordinates, 18 sig digits) off the slow strtod
+                       fallback — the stdlib json gem still strtods it.
      >18 digits / overflow / extreme exponent -> strtod (round-to-odd). */
   if (!overflow && m10digits >= 1 && m10digits <= 18 && (long)m10digits + e10 >= -307) {
     if (m10 == 0) return rb_float_new(neg ? -0.0 : 0.0);
@@ -700,7 +698,7 @@ static VALUE fj_parse_number(fj_state *st) {
   long   nlen;
   int    is_float = 0, neg = 0, overflow = 0;
   uint64_t m10 = 0;                 /* mantissa: integer + fraction digits */
-  int    m10digits = 0;             /* mantissa digit chars (caps the Ryū fast path at 17) */
+  int    m10digits = 0;             /* mantissa digit chars (caps the Eisel-Lemire fast path at 18) */
   int    frac = 0;                  /* fraction digit chars: e10 -= frac */
   int64_t e10 = 0;
 
@@ -955,7 +953,8 @@ static VALUE fj_classify_quoteless(fj_state *st, const char *p0, long n0) {
  * before the whitespace check. */
 enum { FJ_QL_ORD = 0, FJ_QL_TERM, FJ_QL_WS, FJ_QL_CMT };
 static const unsigned char fj_ql_class[256] = {
-  [','] = FJ_QL_TERM, ['}'] = FJ_QL_TERM, [']'] = FJ_QL_TERM,
+  [','] = FJ_QL_TERM, ['{'] = FJ_QL_TERM, ['}'] = FJ_QL_TERM,
+  ['['] = FJ_QL_TERM, [']'] = FJ_QL_TERM,
   [0x0A] = FJ_QL_TERM, [0x0D] = FJ_QL_TERM,
   [0x09] = FJ_QL_WS, [0x0B] = FJ_QL_WS, [0x0C] = FJ_QL_WS, [' '] = FJ_QL_WS,
   ['#'] = FJ_QL_CMT, ['/'] = FJ_QL_CMT,
@@ -1182,7 +1181,8 @@ static int fj_try_member_number(fj_state *st, VALUE *out) {
   /* Commit only if the number abuts a value terminator; otherwise (whitespace,
    * letters, a second '.', "0x…", …) leave it to the quoteless scanner. */
   t = (unsigned char)*p;
-  if (!(t == ',' || t == '}' || t == ']' || t == 0x0A || t == 0x0D || p == buf + st->len)) {
+  if (!(t == ',' || t == '{' || t == '}' || t == '[' || t == ']' ||
+        t == 0x0A || t == 0x0D || p == buf + st->len)) {
     return 0;
   }
 
@@ -1364,6 +1364,9 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
       if (b == '{') { fj_advance(st, 1); fj_fpush(ps, ps->vhead, 1); vss = 0; continue; }
       if (b == '[') { fj_advance(st, 1); fj_fpush(ps, ps->vhead, 0); vss = 0; continue; }
       if (b == -1) fj_error(st, "unexpected end of input");
+      /* Top-level scalar: must be a recognized JSON value (number / literal / quoted
+       * string). A bare word raises — no top-level quoteless strings (B-broad). The
+       * scalar-vs-separator boundary is enforced in fj_parse_c. */
       result = fj_parse_value(st);
       break;
     }
@@ -1484,9 +1487,46 @@ static int fj_implicit_root_ahead(fj_state *st) {
   return result;
 }
 
+/* Between top-level documents, whitespace, comments, AND commas all separate
+ * (commas collapse like the in-container lenient-comma rule). A space alone never
+ * separates — that is handled inside the document by the quoteless run. Mirrors
+ * the Ruby Parser#skip_document_separators. */
+static void fj_skip_document_separators(fj_state *st) {
+  for (;;) {
+    fj_skip_ws_comments(st);
+    if (fj_byte(st) != ',') break;
+    fj_advance(st, 1);
+  }
+}
+
+static int fj_is_hws(int b) { return b == ' ' || b == '\t' || b == 0x0B || b == 0x0C; }
+
+/* After a top-level value: a self-delimiting value (object / array / string) may be
+ * followed by anything, but a bare scalar (number / keyword) must be followed by a
+ * real separator — a newline, ',', a comment, or EOF. A space is NOT a separator, so
+ * `1 2 3` and `42 "x" true` raise. Mirrors the Ruby Parser#enforce_scalar_boundary. */
+static void fj_enforce_scalar_boundary(fj_state *st, VALUE value) {
+  int b, nx;
+  if (RB_TYPE_P(value, T_STRING) || RB_TYPE_P(value, T_HASH) || RB_TYPE_P(value, T_ARRAY)) return;
+  for (;;) {
+    b = fj_byte(st);
+    if (b != -1 && fj_is_hws(b)) { fj_advance(st, 1); continue; }
+    if (b != -1 && b >= 0x80) {
+      long m = fj_mbws(st->buf + st->pos, st->len - st->pos);
+      if (m > 0) { st->pos += m; continue; }  /* multibyte horizontal whitespace (NBSP, …) */
+    }
+    break;
+  }
+  b = fj_byte(st);
+  if (b == -1 || b == 0x0A || b == 0x0D || b == ',') return;
+  if (b == '#') return;
+  if (b == '/') { nx = fj_byte_at(st, 1); if (nx == '/' || nx == '*') return; }
+  fj_error(st, "a top-level number or keyword must be followed by a newline, ',', or end of input");
+}
+
 static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
   fj_state st;
-  VALUE value, enc_opt, dk;
+  VALUE enc_opt, dk;
 
   Check_Type(input, T_STRING);
 
@@ -1531,36 +1571,37 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
     st.pos = 3;
   }
 
-  /* With a block: yield each top-level value until EOF (JSONL / NDJSON /
-   * concatenated). Same loop as the Ruby each_value path, on the C parser. */
+  /* With a block: yield each top-level document until EOF and return the document
+   * count (NDJSON / JSONL / concatenated). Same loop as the Ruby each_value path. */
   if (rb_block_given_p()) {
+    long count = 0;
     for (;;) {
-      fj_skip_ws_comments(&st);
+      VALUE v;
+      fj_skip_document_separators(&st);
       if (fj_eof(&st)) break;
-      rb_yield(fj_parse_iter(&st, fj_implicit_root_ahead(&st)));
+      v = fj_parse_iter(&st, fj_implicit_root_ahead(&st));
+      fj_enforce_scalar_boundary(&st, v);
+      rb_yield(v);
+      count++;
     }
-    return Qnil;
+    return LONG2NUM(count);
   }
 
-  /* No block: auto-detect the document count for free — it is the same "is there
-   * trailing content after the first value?" check that used to raise. 0 documents
-   * -> nil; 1 document -> the value itself (single-document hot path, no Array
-   * allocated); 2+ documents (NDJSON / JSONL / concatenated / whitespace-separated)
-   * -> an Array of every top-level value. Commas do NOT separate documents (only
-   * whitespace / newline / concatenation do), so a bracketless comma list still
-   * raises in fj_parse_iter — the unsupported implicit-root array. */
-  fj_skip_ws_comments(&st);
-  if (fj_eof(&st)) return Qnil;
-  value = fj_parse_iter(&st, fj_implicit_root_ahead(&st));
-  fj_skip_ws_comments(&st);
-  if (fj_eof(&st)) return value;
+  /* No block: always return an Array of every top-level document (0 -> [], 1 ->
+   * [doc], 2+ -> [d1, d2, …]) — the always-array contract. Documents are separated by
+   * newline / comma / concatenation (self-delimiting values); a space alone never
+   * separates, and a bare scalar must be followed by a real separator, so `1 2 3`
+   * raises while `1\n2\n3` and `1, 2, 3` are three documents. */
   {
     VALUE arr = rb_ary_new();
-    rb_ary_push(arr, value);
-    do {
-      rb_ary_push(arr, fj_parse_iter(&st, fj_implicit_root_ahead(&st)));
-      fj_skip_ws_comments(&st);
-    } while (!fj_eof(&st));
+    for (;;) {
+      VALUE v;
+      fj_skip_document_separators(&st);
+      if (fj_eof(&st)) break;
+      v = fj_parse_iter(&st, fj_implicit_root_ahead(&st));
+      fj_enforce_scalar_boundary(&st, v);
+      rb_ary_push(arr, v);
+    }
     return arr;
   }
 }

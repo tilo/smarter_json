@@ -57,15 +57,18 @@ RSpec.describe "parser.rb edge-path coverage (public API)" do
 
   describe "wrapper-recovery byte FSM" do
     it "recovers a payload trailed by a // line comment in noisy input" do
-      expect(SmarterJSON.process("Here is the answer:\n{ \"a\": 1 } // note\n")).to eq({ "a" => 1 })
+      expect(SmarterJSON.process("Here is the answer:\n{ \"a\": 1 } // note\n")).to eq([{ "a" => 1 }])
+      expect(SmarterJSON.process_one("Here is the answer:\n{ \"a\": 1 } // note\n")).to eq({ "a" => 1 })
     end
 
     it "recovers a payload containing a /* block comment */ in noisy input" do
-      expect(SmarterJSON.process("Here is the answer:\n{ \"a\": 1 /* c */ }\n")).to eq({ "a" => 1 })
+      expect(SmarterJSON.process("Here is the answer:\n{ \"a\": 1 /* c */ }\n")).to eq([{ "a" => 1 }])
+      expect(SmarterJSON.process_one("Here is the answer:\n{ \"a\": 1 /* c */ }\n")).to eq({ "a" => 1 })
     end
 
     it "recovers a payload containing a triple-quoted string in noisy input" do
-      expect(SmarterJSON.process("Here is the result:\n{ a: '''multi''' }\nthanks")).to eq({ "a" => "multi" })
+      expect(SmarterJSON.process("Here is the result:\n{ a: '''multi''' }\nthanks")).to eq([{ "a" => "multi" }])
+      expect(SmarterJSON.process_one("Here is the result:\n{ a: '''multi''' }\nthanks")).to eq({ "a" => "multi" })
     end
 
     it "computes line/col across CRLF line endings for a wrapper warning" do
