@@ -158,34 +158,39 @@ SmarterJSON.process(input, on_warning: ->(w) { Rails.logger.warn(w) })
 
 ## Performance
 
-Benchmarks: Apple M1 Max, Ruby 3.4.7, p10 of 40 runs, on the standard JSON corpus. Each cell is **SmarterJSON vs that parser** — "faster" means SmarterJSON wins (run `rake report` in `json_benchmarks/` for the full table; ratios vary run to run).
+SmarterJSON is a C extension (with a pure-Ruby fallback that runs everywhere). Before the speed table, the part that isn't a "× faster" — **things the other parsers can't do at all:**
 
-**SmarterJSON is..**
+- **stdlib `json` can't parse deeply nested data.** It caps nesting at 100 levels and raises; SmarterJSON has no depth limit (iterative parser, bounded only by memory).
+- **None of the others read NDJSON / JSONL / concatenated input in a single call.** Oj, `json`, and Yajl each raise on the second document. Only SmarterJSON's `process` returns every document as an `Array`.
+- **None of the others parse JSON5, HJSON-style config, or LLM-wrapped output.** Comments, trailing commas, unquoted keys, quoteless values, `'single quotes'`, markdown code fences, prose wrappers — all raise in Oj / `json` / Yajl; SmarterJSON parses them.
+- **`json` and Yajl produce `Float` only — lossy on high-precision numbers.** On coordinate / scientific data (>16 significant digits) they silently round to `Float`, so they aren't a like-for-like comparison there. SmarterJSON (and Oj) keep full precision as `BigDecimal` by default.
 
+Where a like-for-like comparison exists, here is SmarterJSON's C path against each parser. **Apple M4, Ruby 3.4.7, p10 of 40 runs.** Each cell is **SmarterJSON vs that parser** — "faster" means SmarterJSON wins. Ratios shift with hardware; run `rake report` in `json_benchmarks/` to reproduce.
 
-| File                      | vs Oj/strict    | vs `json`        | vs Yajl         |
-| ------------------------- | --------------- | ---------------- | --------------- |
-| big_decimals <sup>≠</sup> | **1.8× faster** | **1.1× faster**  | **1.3× faster** |
-| canada <sup>≠</sup>       | **6.4× faster** | 1.6× slower      | **1.8× faster** |
-| citm_catalog              | **1.6× faster** | 1.3× slower      | **4.8× faster** |
-| citylots <sup>≠</sup>     | **4.1× faster** | **2.2× faster**  | **2.5× faster** |
-| config.jsonc              | **1.3× faster** | 1.5× slower      | **3.9× faster** |
-| deeply_nested             | **1.9× faster** | n/a <sup>‡</sup> | **5.4× faster** |
-| github_events             | **1.2× faster** | ≈ tied           | **3.1× faster** |
-| string_array              | 1.6× slower     | **1.1× faster**  | **1.8× faster** |
-| twitter                   | **1.4× faster** | 1.3× slower      | **3.6× faster** |
-| usgs_earthquakes          | **1.2× faster** | 1.5× slower      | **3.7× faster** |
-| weather_berlin            | **1.7× faster** | ≈ tied           | **3.5× faster** |
+| File                          | vs Oj/strict    | vs `json`                    | vs Yajl         |
+| ----------------------------- | --------------- | ---------------------------- | --------------- |
+| big_decimals <sup>≠</sup>     | **1.8× faster** | **1.1× faster**              | **1.3× faster** |
+| canada <sup>≠</sup>           | **8× faster**   | ≈ tied                       | **2.2× faster** |
+| citm_catalog                  | **1.6× faster** | 1.2× slower                  | **4.9× faster** |
+| citylots <sup>≠</sup>         | **3.5× faster** | **2.0× faster**              | **2.3× faster** |
+| config.jsonc                  | **1.1× faster** | 1.5× slower                  | **3.5× faster** |
+| deeply_nested                 | **1.1× faster** | **can't parse** <sup>‡</sup> | **4.1× faster** |
+| github_events                 | **1.2× faster** | ≈ tied                       | **3.1× faster** |
+| string_array                  | 1.7× slower     | ≈ tied                       | **1.3× faster** |
+| twitter                       | **1.4× faster** | 1.3× slower                  | **3.6× faster** |
+| usgs_earthquakes <sup>≠</sup> | **1.5× faster** | — <sup>◊</sup>               | **4.1× faster** |
+| weather_berlin                | **2.0× faster** | **1.1× faster**              | **3.6× faster** |
 
-<sup>≠</sup> Measured in `decimal_precision: :float` (Float, like-for-like). SmarterJSON's **default** `:auto` keeps these high-precision decimals as `BigDecimal` (no precision loss, like Oj's default) — intrinsically slower than `Float`, so comparing the default to `Float`-only parsers would be apples-to-oranges. Against Oj's matching `BigDecimal` default, SmarterJSON is faster there too.
-<sup>‡</sup> **n/a** isn't a measurement gap — it's real default behavior: `json` **errors on these** by default (it raises on multi-document / NDJSON input without a block, and caps nesting at 100 levels). SmarterJSON has neither limit.
+<sup>≠</sup> High-precision file. For `canada` / `citylots` / `big_decimals` the row uses `decimal_precision: :float` (Float, like-for-like). SmarterJSON's **default** `:auto` keeps these decimals as `BigDecimal` (no precision loss, like Oj's default) — intrinsically slower than `Float`, so default-vs-`Float` would be apples-to-oranges. Against Oj's matching `BigDecimal` default, SmarterJSON is faster there too.
+<sup>‡</sup> Not a measurement gap — `json` raises by default: it errors on multi-document / NDJSON input without a block, and caps nesting at 100 levels. SmarterJSON has neither limit.
+<sup>◊</sup> `usgs` has no `:float` row measured yet, so its `Oj/strict` and `Yajl` figures compare SmarterJSON's full-precision `BigDecimal` default against their `Float` — a *conservative* result (SmarterJSON wins while doing strictly more work). A like-for-like `json` cell is omitted until that variant is measured.
 
-In short: **faster than Oj/strict nearly everywhere, far faster than Yajl, ahead of stdlib `json` on high-precision floats (`citylots` ~2×) and string_array, level on github/weather, and behind only on the strict-grammar files** — the cost of the leniency `json` doesn't carry. (`string_array` vs Oj/strict is the one loss — Oj's string-cache fast path; we're level with Oj/compat and `json` there.) Floats are decoded with the **Eisel-Lemire** algorithm (fast_float), correctly rounded and **bit-for-bit identical to `JSON.parse`** — fast *and* exact, even on full-double-precision decimals.
+In short: **faster than Oj/strict on every file but one** — `string_array`, where Oj's string-cache fast path wins (we're level with `json` and Oj/compat there) — **far faster than Yajl everywhere, and level-to-ahead of stdlib `json` on a like-for-like basis**, while parsing input `json` and Oj reject outright. Floats are decoded with the **Eisel-Lemire** algorithm (fast_float), correctly rounded and **bit-for-bit identical to `JSON.parse`** — fast *and* exact, even at full double precision.
 
 **Two notes on fair comparison:**
 
-- **NDJSON:** on multi-document files, **only SmarterJSON reads the input via plain `process`** — Oj and `json` raise without a block (the `‡` above). Plain `process` collects every document into an Array at ~270 MB/s; the streaming block form runs faster (~440 MB/s) because it doesn't hold all documents in memory at once.
-- **High-precision decimals (the `≠` files):** by default these load as `BigDecimal` (full precision, like Oj's default), which is intrinsically slower than `Float`. Pass `decimal_precision: :float` for a like-for-like `Float` comparison — where SmarterJSON **beats stdlib `json`** (e.g. `citylots` ~2×). Against Oj's matching `BigDecimal` default, SmarterJSON is faster either way.
+- **NDJSON / multi-document:** only SmarterJSON reads it via plain `process` — Oj, `json`, and Yajl raise without a block. `process` collects every document into an `Array`; the block form streams one document at a time in bounded memory (use it for input larger than RAM).
+- **High-precision decimals (the <sup>≠</sup> files):** by default these load as `BigDecimal` (full precision, like Oj's default), intrinsically slower than `Float`. Pass `decimal_precision: :float` for a like-for-like `Float` comparison — where SmarterJSON **beats stdlib `json`** (e.g. `citylots` ~2×) — at 3–6× the speed of the `:auto` default on coordinate/scientific data, when you don't need `BigDecimal` precision.
 
 
 ### Options

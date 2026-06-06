@@ -1456,13 +1456,15 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
         vss = 0;
         continue;
       }
-      /* PROTOTYPE strict hot path: inline the number attempt so a numeric element
-         skips fj_parse_member_value's re-read + switch. Falls through to the full
-         dispatch (quoteless / strings / literals) when it isn't a clean number. */
+      /* Strict hot path: inline the two commonest element types — a number and a
+         plain double-quoted string — so they skip fj_parse_member_value's byte
+         re-read + switch. Everything else (quoteless, single/triple-quote,
+         smart-quote, literals) falls through to the full dispatch below. */
       if (b == '-' || b == '+' || b == '.' || (b >= '0' && b <= '9')) {
         VALUE num;
         if (fj_try_member_number(st, &num)) { fj_vpush(ps, num); vss = 1; continue; }
       }
+      if (b == '"') { fj_vpush(ps, fj_parse_string(st, '"')); vss = 1; continue; }
       fj_vpush(ps, fj_parse_member_value(st));
       vss = 1;
     }

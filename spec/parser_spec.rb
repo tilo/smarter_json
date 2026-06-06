@@ -3,6 +3,7 @@
 require "smarter_json"
 require "stringio"
 require "tempfile"
+require "json"
 
 RSpec.describe SmarterJSON do
   # Parity harness: each example runs on the C path (acceleration: true) and the
@@ -845,6 +846,80 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       # ============================================================
       # Encoding handling (§3.1)
       # ============================================================
+
+      # ============================================================
+      # Array string-element dispatch coverage. Locks the behavior of
+      # every path the per-element array dispatch in fj_parse_iter
+      # touches, so the inline `"`-string short-circuit cannot regress
+      # it. Strict cases are cross-checked against JSON.parse; all cases
+      # run on both the C and pure-Ruby paths.
+      # ============================================================
+
+      describe "array string elements (dispatch coverage)" do
+        {
+          "plain strings" => '["a", "b", "c"]',
+          "single empty string" => '[""]',
+          "several empty strings" => '["", "", ""]',
+          "escapes (quote / newline / tab)" => '["a\"b", "line\nbreak", "tab\there"]',
+          "escapes (backslash / slash)" => '["\\\\", "\/"]',
+          "unicode escape + surrogate pair" => '["é", "😀"]',
+          "strings beside numbers/literals" => '["a", 1, true, false, null, "z"]',
+          "string in a nested array" => '[["a", "b"], ["c"]]',
+          "string as object value in array" => '[{"s": "x"}, "y"]',
+          "whitespace around elements" => '[ "a" , "b" ]',
+        }.each do |label, input|
+          it "matches JSON.parse for #{label}" do
+            expected = JSON.parse(input)
+            expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq(expected)
+            expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([expected])
+          end
+        end
+
+        it "preserves multibyte UTF-8 string elements (content, encoding, bytesize)" do
+          input    = '["café", "Zürich", "日本語", "😀"]'.dup.force_encoding("UTF-8")
+          expected = ["café", "Zürich", "日本語", "😀"]
+          [SmarterJSON.process_one(input, acceleration: acceleration),
+           SmarterJSON.process(input, acceleration: acceleration).first].each do |got|
+            expect(got).to eq(expected)
+            got.each_with_index do |s, i|
+              expect(s.encoding).to eq(Encoding::UTF_8)
+              expect(s.bytesize).to eq(expected[i].bytesize)
+            end
+          end
+        end
+
+        it "parses a large all-strings array (string_array.json shape)" do
+          elems = Array.new(5_000) { |i| "item ##{i} café" }
+          input = JSON.generate(elems)
+          expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq(elems)
+          expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([elems])
+        end
+
+        it "still routes single-quoted string elements through the full dispatch" do
+          expect(SmarterJSON.process_one("['x', 'y']", acceleration: acceleration)).to eq(["x", "y"])
+        end
+
+        it "still routes quoteless string elements through the full dispatch" do
+          expect(SmarterJSON.process_one("[red green blue]", acceleration: acceleration)).to eq(["red green blue"])
+          expect(SmarterJSON.process_one("[red, green, blue]", acceleration: acceleration)).to eq(["red", "green", "blue"])
+        end
+
+        it "still collapses an empty slot (and warns) next to string elements" do
+          warnings = []
+          result = SmarterJSON.process_one('["a",, "b"]', acceleration: acceleration, on_warning: ->(w) { warnings << w.type })
+          expect(result).to eq(["a", "b"])
+          expect(warnings).to include(:empty_slot)
+        end
+
+        it "still accepts a trailing comma after a string element" do
+          expect(SmarterJSON.process_one('["a", "b",]', acceleration: acceleration)).to eq(["a", "b"])
+        end
+
+        it "raises on an unterminated string element / array" do
+          expect { SmarterJSON.process_one('["a', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          expect { SmarterJSON.process_one('["a"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+        end
+      end
 
       describe "encoding handling" do
         it "preserves input string encoding (UTF-8)" do
