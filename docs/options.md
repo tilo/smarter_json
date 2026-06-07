@@ -47,7 +47,7 @@ The warning types are `:empty_slot` (a collapsed empty comma slot, e.g. `[1,,2]`
 
 ### A note on `:encoding`
 
-`:encoding` labels what the input *is* — it does not transcode. SmarterJSON works on the bytes in their native encoding and emits string values with the same encoding tag, the same way `smarter_csv` handles encodings. Bytes that are invalid for the claimed encoding raise `SmarterJSON::EncodingError` (a kind of `SmarterJSON::ParseError`). A UTF-8 BOM is handled automatically; UTF-16 / UTF-32 input is out of scope.
+`:encoding` labels what the input *is* — it does not transcode. With the default `nil`, SmarterJSON keeps the input's own encoding tag and emits string values with that tag, the same way `smarter_csv` handles encodings — **with one smart default:** input tagged `ASCII-8BIT` (BINARY) that is valid UTF-8 is treated as UTF-8. This is how `Net::HTTP` returns a `response.body`; without it, those string values would compare unequal to UTF-8 literals. `ASCII-8BIT` input that is *not* valid UTF-8 raises `SmarterJSON::EncodingError` — pass an explicit `:encoding` (e.g. `"ISO-8859-1"`) for genuinely-legacy bytes. Bytes invalid for an explicitly claimed encoding also raise `SmarterJSON::EncodingError` (a kind of `SmarterJSON::ParseError`). A UTF-8 BOM is handled automatically; UTF-16 / UTF-32 input is out of scope.
 
 ### A note on `:decimal_precision`
 

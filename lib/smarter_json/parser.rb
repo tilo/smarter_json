@@ -109,6 +109,25 @@ module SmarterJSON
     end
   end
 
+  # Smart default for the nil :encoding option. A String tagged ASCII-8BIT (BINARY)
+  # is how Net::HTTP and many HTTP libraries hand back a response body even when the
+  # bytes are UTF-8. JSON's interchange encoding is UTF-8, so we relabel such input
+  # to UTF-8 when its bytes are valid UTF-8 — otherwise string values would come back
+  # tagged ASCII-8BIT and compare unequal to UTF-8 literals (a silent footgun). When
+  # the bytes are NOT valid UTF-8 we raise EncodingError rather than guess a legacy
+  # encoding — pass an explicit :encoding for that. An explicit (non-nil) :encoding,
+  # or any non-BINARY tag, is left untouched (the per-path force_encoding / validation
+  # handles it). Only relabels — never transcodes.
+  def normalize_default_encoding(input, options)
+    return input unless options[:encoding].nil?
+    return input unless input.encoding == Encoding::ASCII_8BIT
+
+    utf8 = input.dup.force_encoding(Encoding::UTF_8)
+    return utf8 if utf8.valid_encoding?
+
+    raise EncodingError, "input is tagged ASCII-8BIT and is not valid UTF-8 — pass encoding: to declare its encoding"
+  end
+
   # Stream documents from an IO incrementally, yielding each recovered top-level
   # document without slurping the whole input into memory first.
   def stream_io(io, options, &block)
@@ -411,6 +430,7 @@ module SmarterJSON
     module_function
 
     def process_string(input, options, &block)
+      input = SmarterJSON.send(:normalize_default_encoding, input, options)
       return SmarterJSON.send(:process_content, input, options, &block) unless input.valid_encoding?
 
       # Recovery is REACTIVE: parse first, and only fall back to wrapper extraction when

@@ -7,7 +7,7 @@ module SmarterJSON
   module Options
     DEFAULT_OPTIONS = {
       acceleration: true,        # use the C extension when available; false forces pure Ruby
-      encoding: nil,             # label the input's encoding (no transcoding); nil keeps the input's own
+      encoding: nil,             # label the input's encoding (no transcoding); nil keeps the input's own (valid-UTF-8 ASCII-8BIT → UTF-8)
       symbolize_keys: false,     # Symbol keys instead of String
       duplicate_key: :last_wins, # :last_wins | :first_wins  (repeats are also reported via on_warning)
       decimal_precision: :auto,  # :auto | :float | :bigdecimal  (Oj-compatible decimal handling)

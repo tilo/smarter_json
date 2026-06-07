@@ -994,6 +994,44 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect(SmarterJSON.process(input, acceleration: acceleration).first["name"].encoding).to eq(Encoding::ISO_8859_1)
         end
 
+        describe "default encoding — ASCII-8BIT input treated as UTF-8 (the HTTP-body case)" do
+          it "relabels a valid-UTF-8 body tagged ASCII-8BIT to UTF-8, so equality works" do
+            # How Net::HTTP and many HTTP libraries hand you response.body: correct
+            # UTF-8 bytes, but tagged ASCII-8BIT. Left as BINARY, result["name"] would
+            # compare unequal to a UTF-8 literal even though the bytes match.
+            input = '{"name":"café","city":"Zürich"}'.dup.force_encoding("ASCII-8BIT")
+            result = SmarterJSON.process_one(input, acceleration: acceleration)
+            expect(result["name"].encoding).to eq(Encoding::UTF_8)
+            expect(result["name"]).to eq("café")
+            expect(result["city"]).to eq("Zürich")
+            expect(SmarterJSON.process(input, acceleration: acceleration).first["name"].encoding).to eq(Encoding::UTF_8)
+          end
+
+          it "relabels a pure-ASCII body tagged ASCII-8BIT to UTF-8" do
+            input = '{"a":"x"}'.dup.force_encoding("ASCII-8BIT")
+            result = SmarterJSON.process_one(input, acceleration: acceleration)
+            expect(result["a"].encoding).to eq(Encoding::UTF_8)
+            expect(result["a"]).to eq("x")
+          end
+
+          it "raises EncodingError when an ASCII-8BIT body is not valid UTF-8" do
+            # 0xFF is not valid UTF-8. JSON's interchange encoding is UTF-8, so we raise
+            # rather than silently return BINARY strings or guess a legacy encoding —
+            # pass an explicit encoding: for genuinely-Latin-1 input (next example).
+            input = "{\"name\":\"caf\xFF\"}".dup.force_encoding("ASCII-8BIT")
+            expect { SmarterJSON.process_one(input, acceleration: acceleration) }.to raise_error(SmarterJSON::EncodingError)
+            expect { SmarterJSON.process(input, acceleration: acceleration) }.to raise_error(SmarterJSON::EncodingError)
+          end
+
+          it "respects an explicit encoding: on ASCII-8BIT input (no smart default)" do
+            # Latin-1 "café" (0xE9), tagged BINARY, but the caller declares ISO-8859-1.
+            input = "{\"name\":\"caf\xE9\"}".dup.force_encoding("ASCII-8BIT")
+            result = SmarterJSON.process_one(input, encoding: "ISO-8859-1", acceleration: acceleration)
+            expect(result["name"].encoding).to eq(Encoding::ISO_8859_1)
+            expect(result["name"].bytes).to eq([0x63, 0x61, 0x66, 0xE9])
+          end
+        end
+
         it "parse_file accepts :encoding option" do
           file = File.join(fixtures_dir, "json_pass1.json")
           result = SmarterJSON.process_file(file, encoding: "UTF-8", acceleration: acceleration)
