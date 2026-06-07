@@ -187,7 +187,7 @@ module SmarterJSON
 
     module_function
 
-    def each_document(io, &block)
+    def each_document(io)
       buffer = +""
       scan = 0
       doc_start = nil
@@ -689,8 +689,19 @@ module SmarterJSON
     # followed by a digit ("5.", "5.e3"). Matches iff normalize_for_bigdecimal
     # would change the string — so when it doesn't match, we skip normalization.
     NEEDS_DECIMAL_FIXUP = /\A[+-]?\.|\.(?:[eE]|\z)/.freeze
-    BLANK_HEAD  = /\A[[:space:]]+/.freeze
-    BLANK_TAIL  = /[[:space:]]+\z/.freeze
+
+    # parse_string scans to the next closing-quote-or-backslash. byteindex (Ruby 3.2+,
+    # MRI) does that jump at C speed; the getbyte loop in scan_string_delimiter is the
+    # portable fallback (JRuby / TruffleRuby / older MRI). Both find the same byte.
+    BYTEINDEX_AVAILABLE = "".respond_to?(:byteindex)
+    DQUOTE_OR_BACKSLASH = /["\\]/.freeze
+    SQUOTE_OR_BACKSLASH = /['\\]/.freeze
+
+    # scan_quoteless_run's fast path jumps (in C) to the first structural terminator
+    # (',' '}' ']' '{' '[') OR any whitespace ([[:space:]] covers ASCII + Unicode space,
+    # incl. LF/CR which also terminate). Stopping at a terminator/EOF means the run had no
+    # interior whitespace, so there's nothing to trim and no comment marker can apply.
+    QL_BREAK = /[,{}\[\]]|[[:space:]]/.freeze
 
     # The defaults live centrally in SmarterJSON::Options (lib/smarter_json/options.rb).
     DEFAULT_OPTIONS = Options::DEFAULT_OPTIONS
@@ -703,6 +714,11 @@ module SmarterJSON
       @duplicate_key   = opts[:duplicate_key]
       @decimal_precision = opts[:decimal_precision]
       @on_warning = opts[:on_warning]
+      # store_member only needs the (per-member) Hash#key? duplicate lookup when a
+      # repeat would change behavior: a warning must fire, or :first_wins must keep the
+      # first. With the default (:last_wins, no handler) a duplicate just overwrites,
+      # which `hash[k] = value` already does — so skip the lookup entirely.
+      @check_duplicates = !@on_warning.nil? || @duplicate_key == :first_wins
 
       encoding = opts[:encoding]
       @input = encoding ? input.dup.force_encoding(encoding) : input
@@ -711,8 +727,6 @@ module SmarterJSON
       @bytesize = @input.bytesize
       # Skip a UTF-8 BOM (EF BB BF) at the start of input.
       @pos = @input.getbyte(0) == 0xEF && @input.getbyte(1) == 0xBB && @input.getbyte(2) == 0xBF ? 3 : 0
-      @line = 1
-      @col = 1
     end
 
     # No block: auto-detect the document count for free (the same "is there
@@ -723,7 +737,7 @@ module SmarterJSON
     # concatenation do), so a bracketless comma list still raises in parse_document.
     def parse
       results = []
-      loop do
+      until eof?
         skip_document_separators
         break if eof?
 
@@ -738,7 +752,7 @@ module SmarterJSON
     # whitespace-separated). Used by the block form of SmarterJSON.process.
     def each_value
       count = 0
-      loop do
+      until eof?
         skip_document_separators
         break if eof?
 
@@ -763,11 +777,10 @@ module SmarterJSON
     # separates — that is handled inside the document by the quoteless run, so
     # `1 2 3` is one document (the string "1 2 3") while `1, 2, 3` is three.
     def skip_document_separators
-      loop do
-        skip_whitespace_and_comments
-        break unless byte == COMMA
-
+      skip_whitespace_and_comments
+      while byte == COMMA
         advance(1)
+        skip_whitespace_and_comments
       end
     end
 
@@ -782,7 +795,7 @@ module SmarterJSON
       skip_horizontal_whitespace
       b = byte
       return if b.nil? || b == LF || b == CR || b == COMMA
-      return if b == HASH || (b == SLASH && [SLASH, STAR].include?(byte_at(1)))
+      return if b == HASH || (b == SLASH && ((c = byte_at(1)) == SLASH || c == STAR))
 
       raise error("a top-level number or keyword must be followed by a newline, ',', or end of input")
     end
@@ -790,13 +803,11 @@ module SmarterJSON
     # Skip horizontal whitespace only (space / tab / VT / FF) — NOT newlines, which are
     # document separators. Used by the scalar-boundary check above.
     def skip_horizontal_whitespace
-      loop do
-        b = byte
-        if [SPACE, TAB, 0x0B, 0x0C].include?(b)
+      while (b = byte)
+        if b == SPACE || b == TAB || b == 0x0B || b == 0x0C
           advance(1)
-        elsif b && b >= 0x80 && (n = multibyte_ws_len(@pos)).positive?
+        elsif b >= 0x80 && (n = multibyte_ws_len(@pos)).positive?
           @pos += n # multibyte horizontal whitespace (NBSP, U+2000–200A, …)
-          @col += 1
         else
           break
         end
@@ -823,9 +834,10 @@ module SmarterJSON
       end
 
       vss = false # warnings: has a value landed in the current container since the last separator?
-      loop do
+      input = @input # hoisted: @input never changes mid-parse; byte reads inline as input.getbyte(@pos)
+      while true
         skip_whitespace_and_comments
-        b = byte
+        b = input.getbyte(@pos)
         if at_top
           if b == LBRACE
             advance(1)
@@ -882,12 +894,12 @@ module SmarterJSON
           else
             key = parse_object_key
             skip_whitespace_and_comments
-            raise error("expected ':' after key #{key.inspect}") unless byte == COLON
+            raise error("expected ':' after key #{key.inspect}") unless input.getbyte(@pos) == COLON
 
             advance(1)
             skip_whitespace_and_comments
-            b = byte
-            if [LBRACE, LBRACKET].include?(b)
+            b = input.getbyte(@pos)
+            if b == LBRACE || b == LBRACKET
               child = b == LBRACE ? {} : []
               advance(1) # consume { or [
               store_member(cur, key, child)
@@ -895,7 +907,7 @@ module SmarterJSON
               cur = child
               cur_obj = (b == LBRACE)
               vss = false
-            elsif [RBRACE, COMMA].include?(b)
+            elsif b == RBRACE || b == COMMA
               # key with a colon but no value -> null (don't consume } or ,; the loop does)
               store_member(cur, key, nil)
               warn(:empty_value, "key #{key.inspect} had no value — used null") if @on_warning
@@ -920,7 +932,7 @@ module SmarterJSON
             raise error("unterminated array")
           elsif b == RBRACE
             raise error("unexpected '}' — expected ']' or a value")
-          elsif [LBRACE, LBRACKET].include?(b)
+          elsif b == LBRACE || b == LBRACKET
             child = b == LBRACE ? {} : []
             advance(1) # consume { or [
             cur.push(child)
@@ -942,11 +954,11 @@ module SmarterJSON
       b = byte
       return false unless b && key_start_byte?(b)
 
-      saved = [@pos, @line, @col]
+      saved = @pos
       advance(1) while (c = byte) && key_continue_byte?(c)
       skip_pure_whitespace
       result = (byte == COLON)
-      @pos, @line, @col = saved
+      @pos = saved
       result
     end
 
@@ -964,46 +976,72 @@ module SmarterJSON
       @pos >= @bytesize
     end
 
+    # Advance the byte cursor by n (clamped to EOF). No line/col bookkeeping — that
+    # is computed lazily in line_col_at only when an error/warning is built. This is
+    # the hot-path primitive every consumed byte goes through, so it stays O(1) with
+    # no block, no re-read, and no per-byte branching. Mirrors the C fj_advance.
     def advance(n = 1)
-      n.times do
-        b = @input.getbyte(@pos)
-        return if b.nil?
+      @pos += n
+      @pos = @bytesize if @pos > @bytesize
+    end
 
+    # Line and 1-based BYTE column at byte position `pos`, computed lazily by scanning
+    # from the start of the buffer — only on the cold path (error / warning / triple-quote
+    # indent), never per byte. CR, LF, and CRLF each count as one newline; the column is
+    # the byte offset within the line. Mirrors the C extension's fj_line_col so both paths
+    # report identical positions.
+    def line_col_at(pos = @pos)
+      limit = pos < @bytesize ? pos : @bytesize
+      line = 1
+      col = 1
+      i = 0
+      while i < limit
+        b = @input.getbyte(i)
         if b == LF
-          @line += 1
-          @col = 1
-          @pos += 1
+          line += 1
+          col = 1
         elsif b == CR
-          @line += 1
-          @col = 1
-          @pos += 1
-          @pos += 1 if @input.getbyte(@pos) == LF
+          line += 1
+          col = 1
+          i += 1 if i + 1 < @bytesize && @input.getbyte(i + 1) == LF
         else
-          @col += 1
-          @pos += 1
+          col += 1
         end
+        i += 1
       end
+      [line, col]
+    end
+
+    # 1-based byte column at `pos` (bytes since the last line start). Used for
+    # triple-quoted-string indentation stripping. Mirrors the C fj_column.
+    def column_at(pos = @pos)
+      c = 1
+      i = pos - 1
+      while i >= 0 && (b = @input.getbyte(i)) != LF && b != CR
+        c += 1
+        i -= 1
+      end
+      c
     end
 
     # --- whitespace (Unicode [[:space:]] / Rails blank?; see smarter_json.md §4.7) ---
 
     def skip_pure_whitespace
-      loop do
-        b = byte
-        break if b.nil?
-
+      input = @input
+      pos = @pos
+      while (b = input.getbyte(pos))
         if b == SPACE || (b >= TAB && b <= CR) # 0x20, or 0x09..0x0D
-          advance(1)
+          pos += 1
         elsif b >= 0x80
-          n = multibyte_ws_len(@pos)
+          n = multibyte_ws_len(pos)
           break if n.zero?
 
-          @pos += n
-          @col += 1
+          pos += n
         else
           break
         end
       end
+      @pos = pos
     end
 
     # Number of bytes of the Unicode-whitespace char starting at pos, or 0.
@@ -1037,19 +1075,20 @@ module SmarterJSON
     # A '#', '//', or '/*' starts a comment only when preceded by whitespace
     # or at the very start of input (the comment-marker rule).
     def skip_whitespace_and_comments
-      loop do
+      while true
         skip_pure_whitespace
         b = byte
-        break if b.nil?
+        if b == HASH
+          break unless preceded_by_ws_or_start?
 
-        is_marker = (b == HASH) || (b == SLASH && [SLASH, STAR].include?(byte_at(1)))
-        break unless is_marker
-        break unless preceded_by_ws_or_start?
-
-        if b == SLASH && byte_at(1) == STAR
-          skip_block_comment
-        else
           skip_to_eol
+        elsif b == SLASH
+          c = byte_at(1)
+          break unless (c == SLASH || c == STAR) && preceded_by_ws_or_start?
+
+          c == STAR ? skip_block_comment : skip_to_eol
+        else
+          break
         end
       end
     end
@@ -1089,8 +1128,9 @@ module SmarterJSON
     # --- values ---
 
     # Top-level / strict value: no quoteless fallback.
+    # Precondition: callers (parse_iter) have already run skip_whitespace_and_comments,
+    # so @pos is at the value's first byte — no leading skip needed here.
     def parse_value
-      skip_whitespace_and_comments
       raise error("unexpected end of input") if eof?
 
       b = byte
@@ -1123,8 +1163,9 @@ module SmarterJSON
     end
 
     # Value in object-value or array-element position: quoteless allowed.
+    # Precondition: callers (parse_iter) have already run skip_whitespace_and_comments,
+    # so @pos is at the value's first byte — no leading skip needed here.
     def parse_member_value
-      skip_whitespace_and_comments
       raise error("unexpected end of input") if eof?
 
       b = byte
@@ -1157,7 +1198,7 @@ module SmarterJSON
       until eof?
         if @input.getbyte(@pos) == 0xE2 && @input.getbyte(@pos + 1) == 0x80 &&
            closers.include?(@input.getbyte(@pos + 2))
-          result = @input.byteslice(start, @pos - start).force_encoding(@input.encoding)
+          result = @input.byteslice(start, @pos - start) # byteslice preserves @input's encoding
           advance(3)
           return result
         end
@@ -1168,7 +1209,7 @@ module SmarterJSON
 
     def store_member(hash, key, value)
       k = @symbolize_keys ? key.to_sym : key
-      if hash.key?(k)
+      if @check_duplicates && hash.key?(k)
         warn(:duplicate_key, "duplicate key #{k.inspect} — #{@duplicate_key}") if @on_warning
         return if @duplicate_key == :first_wins
       end
@@ -1199,22 +1240,26 @@ module SmarterJSON
       start = @pos
       advance(1)
       advance(1) while (b = byte) && key_continue_byte?(b)
-      @input.byteslice(start, @pos - start).force_encoding(@input.encoding)
+      @input.byteslice(start, @pos - start) # byteslice preserves @input's encoding
     end
 
     # --- quoteless strings & literal classification ---
 
     def parse_quoteless_or_literal
       start = @pos
-      scan_quoteless_run
+      value_end = scan_quoteless_run
       # A quoteless run must consume at least one byte. If the first byte is a
       # delimiter (',' '}' ']'), the run is empty and @pos didn't move — returning
       # here would make the caller's `result << parse_member_value` loop forever.
       # Raise instead (correct today: the Lenient Commas Option is not adopted).
       raise error("expected a value") if @pos == start
 
-      raw = @input.byteslice(start, @pos - start).force_encoding(@input.encoding)
-      classify_quoteless(trim_blank(raw))
+      # value_end is the end of the last non-whitespace char in the run; slicing to it
+      # drops trailing whitespace without a regex (the caller already skipped leading
+      # whitespace, so there is none to trim at the front). Equivalent to the old
+      # trim_blank(raw) but with no per-scalar String#sub allocations.
+      raw = @input.byteslice(start, value_end - start) # byteslice preserves @input's encoding
+      classify_quoteless(raw)
     end
 
     # Advance to the end of a quoteless run. Stops at structural punctuation
@@ -1222,30 +1267,50 @@ module SmarterJSON
     # self-delimiting value starts fresh: `localhost {"a":1}` -> ["localhost", {...}]),
     # a newline, EOF, or a comment marker that is preceded by whitespace. Spaces by
     # themselves are not delimiters.
+    # Advance @pos to the end of the quoteless run (including any trailing whitespace,
+    # so the parser resumes correctly after the value). Returns value_end: the byte
+    # offset just past the last NON-whitespace char, so the caller can slice off
+    # trailing whitespace without a regex.
     def scan_quoteless_run
+      input = @input
+      pos = @pos
+      # Fast path: one C-level byteindex jumps to the first structural terminator or
+      # whitespace. If it lands on a terminator (or EOF) the run had no interior whitespace,
+      # so [pos, hit) is the whole value — value_end == hit (no trailing trim) and no comment
+      # marker can apply (those only break after whitespace). This is the common case
+      # (numbers and simple tokens). Anything with whitespace falls to the byte-by-byte loop.
+      if BYTEINDEX_AVAILABLE
+        hit = input.byteindex(QL_BREAK, pos) || @bytesize
+        b = hit < @bytesize ? input.getbyte(hit) : nil
+        if b.nil? || b == COMMA || b == RBRACE || b == RBRACKET || b == LBRACE || b == LBRACKET || b == LF || b == CR
+          @pos = hit
+          return hit
+        end
+      end
+
+      # Slow path: the run contains whitespace — scan byte by byte to honor interior
+      # whitespace, trailing-whitespace trimming (value_end is the end of the last
+      # non-whitespace char), and the comment-marker-after-whitespace rule.
+      value_end = pos
       prev_ws = false
-      loop do
-        b = byte
-        break if b.nil?
-        break if [COMMA, RBRACE, RBRACKET, LBRACE, LBRACKET, LF, CR].include?(b)
-        break if prev_ws && (b == HASH || (b == SLASH && [SLASH, STAR].include?(byte_at(1))))
+      while (b = input.getbyte(pos))
+        break if b == COMMA || b == RBRACE || b == RBRACKET || b == LBRACE || b == LBRACKET || b == LF || b == CR
+        break if prev_ws && (b == HASH || (b == SLASH && ((c = input.getbyte(pos + 1)) == SLASH || c == STAR)))
 
         if b == SPACE || (b >= TAB && b <= CR) # tab/VT/FF/space (LF/CR already broke)
           prev_ws = true
-          advance(1)
-        elsif b >= 0x80 && (n = multibyte_ws_len(@pos)).positive?
+          pos += 1
+        elsif b >= 0x80 && (n = multibyte_ws_len(pos)).positive?
           prev_ws = true
-          @pos += n
-          @col += 1
+          pos += n
         else
           prev_ws = false
-          advance(1)
+          pos += 1
+          value_end = pos
         end
       end
-    end
-
-    def trim_blank(str)
-      str.sub(BLANK_HEAD, "").sub(BLANK_TAIL, "")
+      @pos = pos
+      value_end
     end
 
     def classify_quoteless(str)
@@ -1256,7 +1321,7 @@ module SmarterJSON
       when "undefined"             then return nil
       when "NaN"                   then return Float::NAN
       when "Infinity", "+Infinity" then return Float::INFINITY
-      when "-Infinity"             then return (-Float::INFINITY)
+      when "-Infinity"             then return -Float::INFINITY
       end
       num = numeric_value(str)
       num.equal?(NOT_NUMERIC) ? str : num
@@ -1264,16 +1329,35 @@ module SmarterJSON
 
     # Returns an Integer/Float, or NOT_NUMERIC if the whole token isn't a number.
     def numeric_value(str)
-      if HEX_RE.match?(str)
-        neg = str.start_with?("-")
+      # Cheap hex gate: only invoke HEX_RE when the token actually looks like [+-]?0x… .
+      # A Regexp#match? has real per-call cost; almost no number is hex, so the 1–3 byte
+      # check skips that call on the common path (measured +21% on long-token decimals).
+      if hex_prefix?(str) && HEX_RE.match?(str)
+        neg = str.getbyte(0) == MINUS
         body = str.sub(/\A[-+]/, "").delete("_") # "0x...."
         v = body[2..-1].to_i(16)
         return neg ? -v : v
       end
       return NOT_NUMERIC unless DEC_RE.match?(str) && str.match?(/[0-9]/)
 
-      body = str.delete("_")
+      # delete("_") allocates a fresh string even when there is nothing to delete; on long
+      # number tokens that is a real per-value allocation. Underscores are rare, so only
+      # pay it when the token actually contains one (measured +27% on long-token decimals).
+      body = str.include?("_") ? str.delete("_") : str
       body.match?(/[.eE]/) ? decimal_value(body) : body.to_i
+    end
+
+    # True when the token starts with [+-]?0[xX] — the only shape HEX_RE can match.
+    def hex_prefix?(str)
+      c0 = str.getbyte(0)
+      if c0 == ZERO
+        x = str.getbyte(1)
+        x == LOWER_X || x == UPPER_X
+      elsif c0 == MINUS || c0 == PLUS
+        str.getbyte(1) == ZERO && ((x = str.getbyte(2)) == LOWER_X || x == UPPER_X)
+      else
+        false
+      end
     end
 
     # A decimal (has '.' or exponent). decimal_precision: :float -> Float,
@@ -1287,8 +1371,31 @@ module SmarterJSON
       end
     end
 
+    # Count significant mantissa digits (leading zeros excluded, exponent ignored) to pick
+    # Float vs BigDecimal in :auto mode. A single byte-scan — the old three-regex version
+    # (strip exponent, strip non-digits, strip leading zeros, .length) ran on every float
+    # and dominated the number path's cost. body is a DEC_RE-validated token (digits, at most
+    # one '.', optional sign, optional e/E exponent), underscores already removed.
     def significant_digits(body)
-      body.sub(/[eE].*\z/, "").gsub(/[^0-9]/, "").sub(/\A0+/, "").length
+      count = 0
+      leading = true
+      i = 0
+      n = body.bytesize
+      while i < n
+        b = body.getbyte(i)
+        i += 1
+        break if b == LOWER_E || b == UPPER_E # exponent: its digits aren't significant
+
+        next unless b >= ZERO && b <= NINE    # skip sign and the decimal point
+
+        if leading && b == ZERO
+          next                                # leading zero (incl. those after '.') — not significant
+        else
+          leading = false
+          count += 1
+        end
+      end
+      count
     end
 
     def to_big_decimal(body)
@@ -1322,7 +1429,7 @@ module SmarterJSON
     end
 
     def parse_triple_quoted
-      indent = @col - 1
+      indent = column_at(@pos) - 1
       advance(3)
       raw_start = @pos
       until eof?
@@ -1332,7 +1439,7 @@ module SmarterJSON
       end
       raise error("unterminated triple-quoted string") if eof?
 
-      raw = @input.byteslice(raw_start, @pos - raw_start).force_encoding(@input.encoding)
+      raw = @input.byteslice(raw_start, @pos - raw_start) # byteslice preserves @input's encoding
       advance(3)
       strip_triple(raw, indent)
     end
@@ -1362,20 +1469,30 @@ module SmarterJSON
     def parse_string(quote)
       advance(1)
       start = @pos
-      has_escape = false
+      # Fast path (the common case — a string with no escapes): jump straight to the
+      # closing quote with byteindex. It is called only here, from `start`, which is
+      # always a character boundary, so byteindex never sees a mid-char offset.
+      hit = scan_string_delimiter(quote)
+      raise error("unterminated string") if hit.nil?
+
+      if @input.getbyte(hit) == quote
+        @pos = hit
+        result = @input.byteslice(start, @pos - start) # byteslice preserves @input's encoding
+        advance(1)
+        return result
+      end
+
+      # Escape path: a backslash precedes the closing quote. Scan byte by byte from
+      # here — byteindex can't be used past a backslash (a lenient \<multibyte> would
+      # leave @pos mid-character), and this lets the decoder flag invalid escapes
+      # exactly as before. decode_string_with_escapes handles the whole [start, finish].
+      @pos = hit
       while (b = byte)
         if b == quote
-          if has_escape
-            decoded = decode_string_with_escapes(start, @pos, quote)
-            advance(1)
-            return decoded
-          else
-            result = @input.byteslice(start, @pos - start).force_encoding(@input.encoding)
-            advance(1)
-            return result
-          end
+          decoded = decode_string_with_escapes(start, @pos, quote)
+          advance(1)
+          return decoded
         elsif b == BACKSLASH
-          has_escape = true
           advance(1)
           raise error("unterminated string escape") if eof?
 
@@ -1385,6 +1502,20 @@ module SmarterJSON
         end
       end
       raise error("unterminated string")
+    end
+
+    # Byte index of the next closing quote or backslash at/after @pos, or nil if
+    # neither occurs before EOF. byteindex scans inside MRI's C; the fallback is a
+    # tight getbyte loop (the ASCII delimiters never alias UTF-8 continuation bytes,
+    # so byte scanning is correct for UTF-8 string content).
+    def scan_string_delimiter(quote)
+      if BYTEINDEX_AVAILABLE
+        @input.byteindex(quote == DQUOTE ? DQUOTE_OR_BACKSLASH : SQUOTE_OR_BACKSLASH, @pos)
+      else
+        i = @pos
+        i += 1 while i < @bytesize && (b = @input.getbyte(i)) != quote && b != BACKSLASH
+        i < @bytesize ? i : nil
+      end
     end
 
     def decode_string_with_escapes(start, finish, _quote)
@@ -1478,7 +1609,7 @@ module SmarterJSON
 
       if byte == ZERO
         advance(1)
-        if [LOWER_X, UPPER_X].include?(byte)
+        if (x = byte) == LOWER_X || x == UPPER_X
           advance(1)
           hex_start = @pos
           advance(1) while (b = byte) && (hex_digit?(b) || b == UNDERSCORE)
@@ -1503,10 +1634,10 @@ module SmarterJSON
         advance(1) while (b = byte) && ((b >= ZERO && b <= NINE) || b == UNDERSCORE)
       end
 
-      if [LOWER_E, UPPER_E].include?(byte)
+      if (e = byte) == LOWER_E || e == UPPER_E
         is_float = true
         advance(1)
-        advance(1) if [PLUS, MINUS].include?(byte)
+        advance(1) if (s = byte) == PLUS || s == MINUS
         raise error("invalid number: expected digits in exponent") unless byte && byte >= ZERO && byte <= NINE
 
         advance(1) while (b = byte) && ((b >= ZERO && b <= NINE) || b == UNDERSCORE)
@@ -1542,11 +1673,13 @@ module SmarterJSON
     def warn(type, message)
       return unless @on_warning
 
-      @on_warning.call(Warning.new(type, message, @line, @col))
+      line, col = line_col_at(@pos)
+      @on_warning.call(Warning.new(type, message, line, col))
     end
 
     def error(message)
-      ParseError.new(message, @line, @col)
+      line, col = line_col_at(@pos)
+      ParseError.new(message, line, col)
     end
 
     def display_byte(b)

@@ -112,6 +112,12 @@ Style/IfUnlessModifier:
 Style/InverseMethods:
   Enabled: false
 
+Style/InfiniteLoop: # perf: `while true` avoids Kernel#loop's per-iteration block-yield in the hot parser loops
+  Enabled: false
+
+Style/MultipleComparison: # perf: `[a,b].include?(x)` allocates a 2-element Array on every call in hot parser loops; `x == a || x == b` does not (allocation cost survives YJIT)
+  Enabled: false
+
 Style/Lambda:
   Enabled: false
 

@@ -532,6 +532,23 @@ second"', acceleration: acceleration)).to eq("firstsecond")
             expect(SmarterJSON.process_one("text:    hello world   ", acceleration: acceleration)).to eq({ "text" => "hello world" })
           end
 
+          it "keeps a #, //, or /* that is NOT preceded by whitespace as part of the value" do
+            # The quoteless fast path scans to a terminator; a comment marker only ends the
+            # run when preceded by whitespace, so glued-on markers stay in the value.
+            expect(SmarterJSON.process("{k: ab#cd}", acceleration: acceleration)).to eq([{ "k" => "ab#cd" }])
+            expect(SmarterJSON.process("{k: a//b}", acceleration: acceleration)).to eq([{ "k" => "a//b" }])
+            # ...but WITH preceding whitespace it does start a comment (value is just "ab"):
+            expect(SmarterJSON.process("{k: ab #cd\n}", acceleration: acceleration)).to eq([{ "k" => "ab" }])
+          end
+
+          it "trims trailing multibyte whitespace (NBSP / U+3000) but keeps it interior" do
+            # NBSP (U+00A0) and ideographic space (U+3000) are Unicode whitespace: trailing
+            # ones are trimmed from a quoteless value, interior ones are part of the value.
+            expect(SmarterJSON.process("a: hello 　", acceleration: acceleration)).to eq([{ "a" => "hello" }])
+            expect(SmarterJSON.process("a: hello world　", acceleration: acceleration)).to eq([{ "a" => "hello world" }])
+            expect(SmarterJSON.process("[ v　 , w  ]", acceleration: acceleration)).to eq([%w[v w]])
+          end
+
           it "treats backslashes inside quoteless strings as literal (no escape processing)" do
             expect(SmarterJSON.process('text: a \ is just a \\', acceleration: acceleration).first.values.first).to eq('a \\ is just a \\')
             expect(SmarterJSON.process_one('text: a \ is just a \\', acceleration: acceleration).values.first).to eq('a \\ is just a \\')
@@ -918,6 +935,44 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         it "raises on an unterminated string element / array" do
           expect { SmarterJSON.process_one('["a', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
           expect { SmarterJSON.process_one('["a"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+        end
+      end
+
+      # Coverage for the parse_string scan (the byteindex bulk-scan target). Inputs are
+      # generated with JSON.generate so the JSON is guaranteed valid and we assert we parse
+      # back to the exact value — no hand-escaping. Exercises closing-quote detection,
+      # backslash/escape handling, multibyte content, and long runs (the bulk-jump path).
+      describe "string scan coverage" do
+        [
+          "hello world",
+          "",
+          "a\"b",                          # embedded (escaped) quote
+          "a\\b",                          # embedded backslash
+          "\\",                            # lone backslash
+          "a\\",                           # backslash immediately before the closing quote
+          "\"",                            # lone quote
+          "tab\there and a\nnewline",
+          "café 日本語 😀 multibyte",
+          "#{"x" * 5000}\n#{"y" * 5000}",  # long, with a late escape
+          "z" * 8000                       # long, no escapes (pure bulk jump)
+        ].each do |value|
+          it "round-trips #{value.inspect[0, 28]}" do
+            input = JSON.generate(value)
+            expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq(value)
+            expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([value])
+          end
+        end
+
+        it "scans a single-quoted string with an escaped quote" do
+          expect(SmarterJSON.process_one(%q{'a\'b'}, acceleration: acceleration)).to eq("a'b")
+        end
+
+        it "raises on an unterminated string (no closing quote)" do
+          expect { SmarterJSON.process_one('"abc', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated string/)
+        end
+
+        it "raises on a trailing backslash (unterminated escape)" do
+          expect { SmarterJSON.process_one('"abc\\', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated/)
         end
       end
 
@@ -1828,6 +1883,26 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect(SmarterJSON.process_one('"2025-01-31"', acceleration: acceleration)).to eq("2025-01-31")
         end
       end
+    end
+  end
+
+  # Ruby-path only: force scan_string_delimiter's getbyte-loop fallback (the portable
+  # path for JRuby / TruffleRuby / MRI < 3.2, where String#byteindex is absent) by
+  # stubbing BYTEINDEX_AVAILABLE, and prove it parses byte-identically to the byteindex
+  # fast path. Covers parser.rb's scan_string_delimiter else-branch.
+  describe "portable string scan fallback (no String#byteindex)" do
+    let(:strings) { '["ab", "c\nd", "", "café", "x\"y", "a\\\\b"]' }
+
+    it "parses byte-identically to the byteindex path" do
+      fast = SmarterJSON.process(strings, acceleration: false)
+      stub_const("SmarterJSON::Parser::BYTEINDEX_AVAILABLE", false)
+      portable = SmarterJSON.process(strings, acceleration: false)
+      expect(portable).to eq(fast)
+    end
+
+    it "still raises on an unterminated string (the nil-return branch)" do
+      stub_const("SmarterJSON::Parser::BYTEINDEX_AVAILABLE", false)
+      expect { SmarterJSON.process('["ab', acceleration: false) }.to raise_error(SmarterJSON::ParseError)
     end
   end
 end
