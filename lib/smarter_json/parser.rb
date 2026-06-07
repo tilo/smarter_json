@@ -187,7 +187,7 @@ module SmarterJSON
 
     module_function
 
-    def each_document(io, &block)
+    def each_document(io)
       buffer = +""
       scan = 0
       doc_start = nil
@@ -1321,7 +1321,7 @@ module SmarterJSON
       when "undefined"             then return nil
       when "NaN"                   then return Float::NAN
       when "Infinity", "+Infinity" then return Float::INFINITY
-      when "-Infinity"             then return (-Float::INFINITY)
+      when "-Infinity"             then return -Float::INFINITY
       end
       num = numeric_value(str)
       num.equal?(NOT_NUMERIC) ? str : num
