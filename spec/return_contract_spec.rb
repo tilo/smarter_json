@@ -269,4 +269,22 @@ RSpec.describe SmarterJSON, "document & return contract" do
       end
     end
   end
+
+  # warn_extra_documents routing when process_one gets >1 document and NO on_warning
+  # handler. The handler path is covered above; these cover the other two branches:
+  # Rails.logger.warn when Rails is loaded, else Kernel#warn. Path-independent, so once.
+  describe "process_one extra-document warning routing (no on_warning handler)" do
+    it "warns via Kernel#warn when Rails is not loaded" do
+      expect(defined?(Rails)).to be_nil # the suite does not load Rails
+      expect(Kernel).to receive(:warn).with(/more than one document/)
+      expect(SmarterJSON.process_one("1\n2", acceleration: false)).to eq(1)
+    end
+
+    it "routes the warning to Rails.logger.warn when Rails is loaded" do
+      logger = double("logger")
+      expect(logger).to receive(:warn).with(/more than one document/)
+      stub_const("Rails", double("Rails", logger: logger))
+      expect(SmarterJSON.process_one("1\n2", acceleration: false)).to eq(1)
+    end
+  end
 end

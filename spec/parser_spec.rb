@@ -1885,4 +1885,24 @@ second"', acceleration: acceleration)).to eq("firstsecond")
       end
     end
   end
+
+  # Ruby-path only: force scan_string_delimiter's getbyte-loop fallback (the portable
+  # path for JRuby / TruffleRuby / MRI < 3.2, where String#byteindex is absent) by
+  # stubbing BYTEINDEX_AVAILABLE, and prove it parses byte-identically to the byteindex
+  # fast path. Covers parser.rb's scan_string_delimiter else-branch.
+  describe "portable string scan fallback (no String#byteindex)" do
+    let(:strings) { '["ab", "c\nd", "", "café", "x\"y", "a\\\\b"]' }
+
+    it "parses byte-identically to the byteindex path" do
+      fast = SmarterJSON.process(strings, acceleration: false)
+      stub_const("SmarterJSON::Parser::BYTEINDEX_AVAILABLE", false)
+      portable = SmarterJSON.process(strings, acceleration: false)
+      expect(portable).to eq(fast)
+    end
+
+    it "still raises on an unterminated string (the nil-return branch)" do
+      stub_const("SmarterJSON::Parser::BYTEINDEX_AVAILABLE", false)
+      expect { SmarterJSON.process('["ab', acceleration: false) }.to raise_error(SmarterJSON::ParseError)
+    end
+  end
 end
