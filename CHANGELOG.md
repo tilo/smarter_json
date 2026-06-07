@@ -3,6 +3,9 @@
 
 > 🚧 Getting ready for the 1.0.0 release - sorry for the interface changes - thank you for your patience! 🚧
 
+## 0.9.9 (2026-06-06 unreleased)
+- Much faster pure-Ruby parsing (the path used without the C extension) — roughly 3× on string-heavy data, ~2× on number-heavy, ~1.7× on object-heavy (on a YJIT-enabled Ruby). Parsed values are unchanged.
+
 ## 0.9.8 (2026-06-06 unreleased)
 - Faster parsing of string-heavy arrays — Parsed values are unchanged.
 

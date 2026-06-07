@@ -532,6 +532,23 @@ second"', acceleration: acceleration)).to eq("firstsecond")
             expect(SmarterJSON.process_one("text:    hello world   ", acceleration: acceleration)).to eq({ "text" => "hello world" })
           end
 
+          it "keeps a #, //, or /* that is NOT preceded by whitespace as part of the value" do
+            # The quoteless fast path scans to a terminator; a comment marker only ends the
+            # run when preceded by whitespace, so glued-on markers stay in the value.
+            expect(SmarterJSON.process("{k: ab#cd}", acceleration: acceleration)).to eq([{ "k" => "ab#cd" }])
+            expect(SmarterJSON.process("{k: a//b}", acceleration: acceleration)).to eq([{ "k" => "a//b" }])
+            # ...but WITH preceding whitespace it does start a comment (value is just "ab"):
+            expect(SmarterJSON.process("{k: ab #cd\n}", acceleration: acceleration)).to eq([{ "k" => "ab" }])
+          end
+
+          it "trims trailing multibyte whitespace (NBSP / U+3000) but keeps it interior" do
+            # NBSP (U+00A0) and ideographic space (U+3000) are Unicode whitespace: trailing
+            # ones are trimmed from a quoteless value, interior ones are part of the value.
+            expect(SmarterJSON.process("a: hello 　", acceleration: acceleration)).to eq([{ "a" => "hello" }])
+            expect(SmarterJSON.process("a: hello world　", acceleration: acceleration)).to eq([{ "a" => "hello world" }])
+            expect(SmarterJSON.process("[ v　 , w  ]", acceleration: acceleration)).to eq([%w[v w]])
+          end
+
           it "treats backslashes inside quoteless strings as literal (no escape processing)" do
             expect(SmarterJSON.process('text: a \ is just a \\', acceleration: acceleration).first.values.first).to eq('a \\ is just a \\')
             expect(SmarterJSON.process_one('text: a \ is just a \\', acceleration: acceleration).values.first).to eq('a \\ is just a \\')
