@@ -921,6 +921,44 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
       end
 
+      # Coverage for the parse_string scan (the byteindex bulk-scan target). Inputs are
+      # generated with JSON.generate so the JSON is guaranteed valid and we assert we parse
+      # back to the exact value — no hand-escaping. Exercises closing-quote detection,
+      # backslash/escape handling, multibyte content, and long runs (the bulk-jump path).
+      describe "string scan coverage" do
+        [
+          "hello world",
+          "",
+          "a\"b",                          # embedded (escaped) quote
+          "a\\b",                          # embedded backslash
+          "\\",                            # lone backslash
+          "a\\",                           # backslash immediately before the closing quote
+          "\"",                            # lone quote
+          "tab\there and a\nnewline",
+          "café 日本語 😀 multibyte",
+          "#{"x" * 5000}\n#{"y" * 5000}",  # long, with a late escape
+          "z" * 8000                       # long, no escapes (pure bulk jump)
+        ].each do |value|
+          it "round-trips #{value.inspect[0, 28]}" do
+            input = JSON.generate(value)
+            expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq(value)
+            expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([value])
+          end
+        end
+
+        it "scans a single-quoted string with an escaped quote" do
+          expect(SmarterJSON.process_one(%q{'a\'b'}, acceleration: acceleration)).to eq("a'b")
+        end
+
+        it "raises on an unterminated string (no closing quote)" do
+          expect { SmarterJSON.process_one('"abc', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated string/)
+        end
+
+        it "raises on a trailing backslash (unterminated escape)" do
+          expect { SmarterJSON.process_one('"abc\\', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /unterminated/)
+        end
+      end
+
       describe "encoding handling" do
         it "preserves input string encoding (UTF-8)" do
           input = '{"name": "café"}'.dup.force_encoding("UTF-8")

@@ -688,6 +688,13 @@ module SmarterJSON
     BLANK_HEAD  = /\A[[:space:]]+/.freeze
     BLANK_TAIL  = /[[:space:]]+\z/.freeze
 
+    # parse_string scans to the next closing-quote-or-backslash. byteindex (Ruby 3.2+,
+    # MRI) does that jump at C speed; the getbyte loop in scan_string_delimiter is the
+    # portable fallback (JRuby / TruffleRuby / older MRI). Both find the same byte.
+    BYTEINDEX_AVAILABLE = "".respond_to?(:byteindex)
+    DQUOTE_OR_BACKSLASH = /["\\]/.freeze
+    SQUOTE_OR_BACKSLASH = /['\\]/.freeze
+
     # The defaults live centrally in SmarterJSON::Options (lib/smarter_json/options.rb).
     DEFAULT_OPTIONS = Options::DEFAULT_OPTIONS
 
@@ -707,8 +714,6 @@ module SmarterJSON
       @bytesize = @input.bytesize
       # Skip a UTF-8 BOM (EF BB BF) at the start of input.
       @pos = @input.getbyte(0) == 0xEF && @input.getbyte(1) == 0xBB && @input.getbyte(2) == 0xBF ? 3 : 0
-      @line = 1
-      @col = 1
     end
 
     # No block: auto-detect the document count for free (the same "is there
@@ -792,7 +797,6 @@ module SmarterJSON
           advance(1)
         elsif b && b >= 0x80 && (n = multibyte_ws_len(@pos)).positive?
           @pos += n # multibyte horizontal whitespace (NBSP, U+2000–200A, …)
-          @col += 1
         else
           break
         end
@@ -938,11 +942,11 @@ module SmarterJSON
       b = byte
       return false unless b && key_start_byte?(b)
 
-      saved = [@pos, @line, @col]
+      saved = @pos
       advance(1) while (c = byte) && key_continue_byte?(c)
       skip_pure_whitespace
       result = (byte == COLON)
-      @pos, @line, @col = saved
+      @pos = saved
       result
     end
 
@@ -960,25 +964,52 @@ module SmarterJSON
       @pos >= @bytesize
     end
 
+    # Advance the byte cursor by n (clamped to EOF). No line/col bookkeeping — that
+    # is computed lazily in line_col_at only when an error/warning is built. This is
+    # the hot-path primitive every consumed byte goes through, so it stays O(1) with
+    # no block, no re-read, and no per-byte branching. Mirrors the C fj_advance.
     def advance(n = 1)
-      n.times do
-        b = @input.getbyte(@pos)
-        return if b.nil?
+      @pos += n
+      @pos = @bytesize if @pos > @bytesize
+    end
 
+    # Line and 1-based BYTE column at byte position `pos`, computed lazily by scanning
+    # from the start of the buffer — only on the cold path (error / warning / triple-quote
+    # indent), never per byte. CR, LF, and CRLF each count as one newline; the column is
+    # the byte offset within the line. Mirrors the C extension's fj_line_col so both paths
+    # report identical positions.
+    def line_col_at(pos = @pos)
+      limit = pos < @bytesize ? pos : @bytesize
+      line = 1
+      col = 1
+      i = 0
+      while i < limit
+        b = @input.getbyte(i)
         if b == LF
-          @line += 1
-          @col = 1
-          @pos += 1
+          line += 1
+          col = 1
         elsif b == CR
-          @line += 1
-          @col = 1
-          @pos += 1
-          @pos += 1 if @input.getbyte(@pos) == LF
+          line += 1
+          col = 1
+          i += 1 if i + 1 < @bytesize && @input.getbyte(i + 1) == LF
         else
-          @col += 1
-          @pos += 1
+          col += 1
         end
+        i += 1
       end
+      [line, col]
+    end
+
+    # 1-based byte column at `pos` (bytes since the last line start). Used for
+    # triple-quoted-string indentation stripping. Mirrors the C fj_column.
+    def column_at(pos = @pos)
+      c = 1
+      i = pos - 1
+      while i >= 0 && (b = @input.getbyte(i)) != LF && b != CR
+        c += 1
+        i -= 1
+      end
+      c
     end
 
     # --- whitespace (Unicode [[:space:]] / Rails blank?; see smarter_json.md §4.7) ---
@@ -995,7 +1026,6 @@ module SmarterJSON
           break if n.zero?
 
           @pos += n
-          @col += 1
         else
           break
         end
@@ -1232,7 +1262,6 @@ module SmarterJSON
         elsif b >= 0x80 && (n = multibyte_ws_len(@pos)).positive?
           prev_ws = true
           @pos += n
-          @col += 1
         else
           prev_ws = false
           advance(1)
@@ -1318,7 +1347,7 @@ module SmarterJSON
     end
 
     def parse_triple_quoted
-      indent = @col - 1
+      indent = column_at(@pos) - 1
       advance(3)
       raw_start = @pos
       until eof?
@@ -1358,20 +1387,30 @@ module SmarterJSON
     def parse_string(quote)
       advance(1)
       start = @pos
-      has_escape = false
+      # Fast path (the common case — a string with no escapes): jump straight to the
+      # closing quote with byteindex. It is called only here, from `start`, which is
+      # always a character boundary, so byteindex never sees a mid-char offset.
+      hit = scan_string_delimiter(quote)
+      raise error("unterminated string") if hit.nil?
+
+      if @input.getbyte(hit) == quote
+        @pos = hit
+        result = @input.byteslice(start, @pos - start).force_encoding(@input.encoding)
+        advance(1)
+        return result
+      end
+
+      # Escape path: a backslash precedes the closing quote. Scan byte by byte from
+      # here — byteindex can't be used past a backslash (a lenient \<multibyte> would
+      # leave @pos mid-character), and this lets the decoder flag invalid escapes
+      # exactly as before. decode_string_with_escapes handles the whole [start, finish].
+      @pos = hit
       while (b = byte)
         if b == quote
-          if has_escape
-            decoded = decode_string_with_escapes(start, @pos, quote)
-            advance(1)
-            return decoded
-          else
-            result = @input.byteslice(start, @pos - start).force_encoding(@input.encoding)
-            advance(1)
-            return result
-          end
+          decoded = decode_string_with_escapes(start, @pos, quote)
+          advance(1)
+          return decoded
         elsif b == BACKSLASH
-          has_escape = true
           advance(1)
           raise error("unterminated string escape") if eof?
 
@@ -1381,6 +1420,20 @@ module SmarterJSON
         end
       end
       raise error("unterminated string")
+    end
+
+    # Byte index of the next closing quote or backslash at/after @pos, or nil if
+    # neither occurs before EOF. byteindex scans inside MRI's C; the fallback is a
+    # tight getbyte loop (the ASCII delimiters never alias UTF-8 continuation bytes,
+    # so byte scanning is correct for UTF-8 string content).
+    def scan_string_delimiter(quote)
+      if BYTEINDEX_AVAILABLE
+        @input.byteindex(quote == DQUOTE ? DQUOTE_OR_BACKSLASH : SQUOTE_OR_BACKSLASH, @pos)
+      else
+        i = @pos
+        i += 1 while i < @bytesize && (b = @input.getbyte(i)) != quote && b != BACKSLASH
+        i < @bytesize ? i : nil
+      end
     end
 
     def decode_string_with_escapes(start, finish, _quote)
@@ -1538,11 +1591,13 @@ module SmarterJSON
     def warn(type, message)
       return unless @on_warning
 
-      @on_warning.call(Warning.new(type, message, @line, @col))
+      line, col = line_col_at(@pos)
+      @on_warning.call(Warning.new(type, message, line, col))
     end
 
     def error(message)
-      ParseError.new(message, @line, @col)
+      line, col = line_col_at(@pos)
+      ParseError.new(message, line, col)
     end
 
     def display_byte(b)
