@@ -24,16 +24,29 @@ module SmarterJSON
     end
 
     # Raise ArgumentError (consistent with the generator's option checks) listing
-    # every invalid setting at once. Unknown keys are ignored, matching the lenient
-    # design — an option SmarterJSON doesn't recognize simply has no effect.
+    # every problem at once. Configuration is strict — unlike the lenient *data*
+    # handling, an unknown option key or a bad value raises, so a caller's typo or
+    # wrong type is caught immediately instead of silently having no effect.
     def validate_options!(options)
       errors = []
+
+      unknown = options.keys - DEFAULT_OPTIONS.keys
+      unless unknown.empty?
+        errors << "unknown option#{unknown.size == 1 ? '' : 's'} #{unknown.map(&:inspect).join(', ')} " \
+                  "— valid keys: #{DEFAULT_OPTIONS.keys.map(&:inspect).join(', ')}"
+      end
 
       unless %i[auto float bigdecimal].include?(options[:decimal_precision])
         errors << "decimal_precision must be :auto, :float, or :bigdecimal (got #{options[:decimal_precision].inspect})"
       end
       unless %i[last_wins first_wins].include?(options[:duplicate_key])
         errors << "duplicate_key must be :last_wins or :first_wins (got #{options[:duplicate_key].inspect})"
+      end
+      unless [true, false].include?(options[:acceleration])
+        errors << "acceleration must be true or false (got #{options[:acceleration].inspect})"
+      end
+      unless [true, false].include?(options[:symbolize_keys])
+        errors << "symbolize_keys must be true or false (got #{options[:symbolize_keys].inspect})"
       end
       on_warning = options[:on_warning]
       unless on_warning.nil? || on_warning.respond_to?(:call)

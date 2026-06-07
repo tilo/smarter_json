@@ -292,18 +292,51 @@ RSpec.describe "SmarterJSON.generate" do
     end
   end
 
+  describe "value validation (every writer option, valid and invalid)" do
+    # One source of truth for the writer option/value matrix, mirroring the reader
+    # matrix in options_spec.rb. format and the four flags are closed sets; indent
+    # is any non-negative Integer (valid samples representative).
+    option_cases = {
+      format: { valid: %i[json ndjson], invalid: [:bogus, "json", 1, nil] },
+      indent: { valid: [0, 2, 4],       invalid: [-1, "2", 1.5, nil] },
+      ascii_only: { valid: [true, false], invalid: ["yes", 1, nil] },
+      script_safe: { valid: [true, false], invalid: [1, "x", nil] },
+      sort_keys: { valid: [true, false], invalid: ["x", 0, nil] },
+      coerce: { valid: [true, false], invalid: [0, "x", nil] },
+    }
+
+    it "the case table covers every known writer option (no option escapes the matrix)" do
+      expect(option_cases.keys).to match_array(SmarterJSON::Generator::KNOWN_OPTIONS)
+    end
+
+    option_cases.each do |key, cases|
+      cases[:valid].each do |value|
+        it "accepts #{key}: #{value.inspect}" do
+          expect { SmarterJSON.generate({}, key => value) }.not_to raise_error
+        end
+      end
+
+      cases[:invalid].each do |value|
+        it "rejects #{key}: #{value.inspect}" do
+          expect { SmarterJSON.generate({}, key => value) }.to raise_error(ArgumentError, /#{key}/)
+        end
+      end
+    end
+  end
+
   describe "errors" do
-    it "raises ArgumentError on an unknown writer format" do
-      expect { SmarterJSON.generate({}, format: :bogus) }.to raise_error(ArgumentError, /format/)
-    end
-
-    it "raises ArgumentError on a negative or non-Integer indent" do
-      expect { SmarterJSON.generate({}, indent: -1) }.to raise_error(ArgumentError, /indent/)
-      expect { SmarterJSON.generate({}, indent: "2") }.to raise_error(ArgumentError, /indent/)
-    end
-
     it "raises ArgumentError when indent is combined with format: :ndjson" do
       expect { SmarterJSON.generate([1, 2], format: :ndjson, indent: 2) }.to raise_error(ArgumentError, /ndjson/)
+    end
+
+    it "raises ArgumentError on an unknown writer option — fail early so a typo is caught" do
+      expect { SmarterJSON.generate({}, no_such_option: 1) }
+        .to raise_error(ArgumentError, /unknown option.*no_such_option/i)
+    end
+
+    it "rejects pretty: true (the option is named indent:) instead of silently ignoring it" do
+      expect { SmarterJSON.generate({}, pretty: true) }
+        .to raise_error(ArgumentError, /unknown option.*pretty/i)
     end
   end
 end

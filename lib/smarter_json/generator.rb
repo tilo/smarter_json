@@ -34,7 +34,17 @@ module SmarterJSON
     # (including multi-byte UTF-8) is emitted raw — valid JSON.
     ESCAPE_RE = /["\\\x00-\x1f]/.freeze
 
+    # Strict configuration: an unknown writer option is a caller bug, so it raises
+    # rather than being silently ignored.
+    KNOWN_OPTIONS = %i[format indent ascii_only script_safe sort_keys coerce].freeze
+
     def initialize(options = {})
+      unknown = options.keys - KNOWN_OPTIONS
+      unless unknown.empty?
+        raise ArgumentError, "SmarterJSON.generate: unknown option#{unknown.size == 1 ? '' : 's'} " \
+                             "#{unknown.map(&:inspect).join(', ')} — valid keys: #{KNOWN_OPTIONS.map(&:inspect).join(', ')}"
+      end
+
       @format = options.fetch(:format, :json)
       unless %i[json ndjson].include?(@format)
         raise ArgumentError, "unknown writer format: #{@format.inspect} (expected :json or :ndjson)"
@@ -50,10 +60,10 @@ module SmarterJSON
 
       @pretty = @indent > 0
 
-      @ascii_only  = options.fetch(:ascii_only, false)  # escape non-ASCII as \uXXXX
-      @script_safe = options.fetch(:script_safe, false) # escape </ and U+2028 / U+2029
-      @sort_keys   = options.fetch(:sort_keys, false)   # emit object keys in sorted order
-      @coerce      = options.fetch(:coerce, false)      # convert unknown types via as_json / to_json
+      @ascii_only  = boolean_option(options, :ascii_only)  # escape non-ASCII as \uXXXX
+      @script_safe = boolean_option(options, :script_safe) # escape </ and U+2028 / U+2029
+      @sort_keys   = boolean_option(options, :sort_keys)   # emit object keys in sorted order
+      @coerce      = boolean_option(options, :coerce)      # convert unknown types via as_json / to_json
       @escape_re   = build_escape_re
     end
 
@@ -76,6 +86,15 @@ module SmarterJSON
     end
 
     private
+
+    # A boolean writer option must be exactly true or false — a wrong type is a
+    # caller bug, so it raises rather than being coerced or ignored.
+    def boolean_option(options, key)
+      value = options.fetch(key, false)
+      return value if value == true || value == false
+
+      raise ArgumentError, "#{key} must be true or false (got #{value.inspect})"
+    end
 
     def emit(obj, buf, level = 0)
       case obj
