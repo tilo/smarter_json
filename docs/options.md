@@ -13,7 +13,7 @@
 
 ## Reading
 
-These options are passed to [`SmarterJSON.process`](./basic_read_api.md), `SmarterJSON.process_one`, and `SmarterJSON.process_file` as the second argument; anything you set overrides the defaults below.
+These options are passed to [`SmarterJSON.process`](./basic_read_api.md), `SmarterJSON.process_one`, and `SmarterJSON.process_file` as the second argument; anything you set overrides the defaults below. Configuration is strict: an unknown option key, or a known key given the wrong type or value, raises `ArgumentError` immediately — leniency applies to the JSON *input* you parse, not to the options you pass, so a typo (e.g. `symbolize_names:` instead of `symbolize_keys:`) is caught right away.
 
 | Option            | Default      | Explanation                                                                                                            |
 |-------------------|--------------|------------------------------------------------------------------------------------------------------------------------|
@@ -66,7 +66,7 @@ These options are passed to [`SmarterJSON.generate`](./basic_write_api.md) as th
 | `:script_safe`  | `false` | Escape the `/` in `</` and the JS line separators U+2028 / U+2029, so output is safe to embed in an HTML `<script>` tag. |
 | `:coerce`       | `false` | When `true`, a value that isn't natively supported is converted by its own `as_json` (the result is re-emitted, so the other options still apply) or, failing that, `to_json` (spliced verbatim). When `false` (the default), such a value raises `SmarterJSON::GenerateError`. |
 
-Any other `:format` value, a negative/non-Integer `:indent`, or combining `:indent` with `:ndjson`, raises `ArgumentError`.
+Configuration is validated up front: an unknown option key, a known key with the wrong type or value (a non-Symbol `:format`, a negative/non-Integer `:indent`, a non-boolean flag), or combining `:indent` with `:ndjson`, raises `ArgumentError`.
 
 ```ruby
 SmarterJSON.generate([1, 2, 3])                              # => "[1,2,3]"   (default :json — a single JSON array)
