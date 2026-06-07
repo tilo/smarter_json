@@ -1,5 +1,9 @@
 # frozen_string_literal: true
 
+# Array#filter_map (used in Recovery#extract_payloads) is Ruby 2.7+; on Ruby < 2.7
+# activate the scoped refinement backport (no-op on 2.7+, which uses native filter_map).
+using SmarterJSON::Backports if Gem::Version.new(RUBY_VERSION) < Gem::Version.new("2.7")
+
 module SmarterJSON
   # ParseError / EncodingError live in errors.rb (loaded first) so they can inherit
   # from the shared SmarterJSON::Error base.

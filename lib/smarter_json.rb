@@ -2,6 +2,7 @@
 
 require "bigdecimal" # for decimal_precision: :auto / :bigdecimal (Oj-compatible)
 
+require_relative "smarter_json/backports" # Enumerable#filter_map backport for Ruby < 2.7 (no-op on 2.7+)
 require_relative "smarter_json/version"
 require_relative "smarter_json/errors" # base Error + subclasses — must load before parser/generator
 require_relative "smarter_json/warning" # SmarterJSON::Warning value object (the warnings: option)
