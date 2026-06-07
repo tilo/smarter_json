@@ -3,7 +3,19 @@
 
 > 🚧 Getting ready for the 1.0.0 release - sorry for the interface changes - thank you for your patience! 🚧
 
-## 0.9.9 (2026-06-06 unreleased)
+> ⚠️ **Interface change (since 0.9.7):** 
+> 
+> `SmarterJSON.process` / `SmarterJSON.process_file` now **always return an `Array`** of documents:
+>  — `[]` for no doc
+>  - `[doc]` for one doc
+>  - `[d1, d2, …]` for several docs (NDJSON / JSONL / concatenated docs). 
+
+Going forward this will be the supported interface.
+
+> ⚠️ We discourage the use of `process(input).first` / `[0]` because it silently drops potential additional documents
+>    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads.
+
+## 0.9.9 (2026-06-07)
 - Much faster pure-Ruby parsing (the path used without the C extension) — roughly 3× on string-heavy data, ~2× on number-heavy, ~1.7× on object-heavy (on a YJIT-enabled Ruby). Parsed values are unchanged.
 
 ## 0.9.8 (2026-06-06 unreleased)
