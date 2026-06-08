@@ -3,16 +3,17 @@
 
 > 🚧 Getting ready for the 1.0.0 release - sorry for the interface changes - thank you for your patience! 🚧
 
-> ⚠️ **Interface change (since 0.9.7):** 
+> ⚠️ **New Interface (since 0.9.7):**
+>
+> SmarterJSON **always return an `Array`** of documents:
 > 
-> `SmarterJSON.process` / `SmarterJSON.process_file` now **always return an `Array`** of documents:
+> `SmarterJSON.process` / `SmarterJSON.process_file` return:
+>
 >  — `[]` for no doc
 >  - `[doc]` for one doc
 >  - `[d1, d2, …]` for several docs (NDJSON / JSONL / concatenated docs). 
 
-Going forward this will be the supported interface.
-
-> ⚠️ We discourage the use of `process(input).first` / `[0]` because it silently drops potential additional documents
+> ⚠️ We discourage the use of `process(input).first` / `process(input)[0]` because it silently drops potential additional documents
 >    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads.
 
 ## 0.9.10 (unreleased)
