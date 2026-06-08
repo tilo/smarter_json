@@ -600,8 +600,10 @@ static FJ_ALWAYS_INLINE VALUE fj_float_from_parts(fj_state *st, uint64_t m10, in
   }
   /* A finite literal whose magnitude exceeds Float range (e.g. 1e400) becomes
      ±Infinity — a silent data change. Report it via :number_overflow (the value is
-     still returned). The Infinity/NaN keywords take separate paths and never get here. */
-  if (isinf(d)) fj_warn(st, fj_sym_number_overflow, "number literal out of Float range — collapsed to Infinity");
+     still returned). The Infinity/NaN keywords take separate paths and never get here.
+     Gate isinf on a listening handler (matches the Ruby float_or_warn): no handler ->
+     no point detecting, and it keeps the test off the hot number path. */
+  if (st->on_warning != Qnil && isinf(d)) fj_warn(st, fj_sym_number_overflow, "number literal out of Float range — collapsed to Infinity");
   return rb_float_new(d);
 }
 

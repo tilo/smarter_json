@@ -1403,7 +1403,10 @@ module SmarterJSON
     # a separate path and never reach here, so they don't warn.
     def float_or_warn(body)
       f = body.to_f
-      warn(:number_overflow, "number literal out of Float range — collapsed to #{f}") if f.infinite?
+      # Only test for overflow when an on_warning handler is listening: `f.infinite?` is a
+      # per-float method call we don't want on the hot number path otherwise, and with no
+      # handler the warning would go nowhere anyway. Overflow is vanishingly rare.
+      warn(:number_overflow, "number literal out of Float range — collapsed to #{f}") if @on_warning && f.infinite?
       f
     end
 
