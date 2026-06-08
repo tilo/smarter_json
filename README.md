@@ -176,7 +176,7 @@ Where a like-for-like comparison exists, here is SmarterJSON's C path against ea
 | config.jsonc                  | **1.1× faster** | 1.2× slower                  | **3.6× faster** |
 | deeply_nested                 | **1.2× faster** | **can't parse** <sup>‡</sup> | **4.1× faster** |
 | github_events                 | ≈ tied          | 1.1× slower                  | **2.7× faster** |
-| string_array                  | **1.1× faster** | ≈ tied                       | **1.7× faster** |
+| string_array                  | ≈ tied          | ≈ tied                       | **1.6× faster** |
 | twitter                       | **1.3× faster** | 1.2× slower                  | **3.2× faster** |
 | usgs_earthquakes <sup>≠</sup> | **1.4× faster** | 1.1× slower                  | **3.4× faster** |
 | weather_berlin                | **1.8× faster** | **1.1× faster**              | **3.2× faster** |
