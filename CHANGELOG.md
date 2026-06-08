@@ -9,9 +9,9 @@
 > 
 > `SmarterJSON.process` / `SmarterJSON.process_file` return:
 >
->  — `[]` for no doc
->  - `[doc]` for one doc
->  - `[d1, d2, …]` for several docs (NDJSON / JSONL / concatenated docs). 
+> — `[]` for no doc
+> - `[doc]` for one doc
+> - `[d1, d2, …]` for several docs (NDJSON / JSONL / concatenated docs)
 
 > ⚠️ We discourage the use of `process(input).first` / `process(input)[0]` because it silently drops potential additional documents
 >    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads.
