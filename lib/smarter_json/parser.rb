@@ -1391,10 +1391,20 @@ module SmarterJSON
     # than 16 significant digits (Oj's DEC_MAX threshold), else Float.
     def decimal_value(body)
       case @decimal_precision
-      when :float      then body.to_f
+      when :float      then float_or_warn(body)
       when :bigdecimal then to_big_decimal(body)
-      else                  significant_digits(body) > 16 ? to_big_decimal(body) : body.to_f
+      else                  significant_digits(body) > 16 ? to_big_decimal(body) : float_or_warn(body)
       end
+    end
+
+    # A finite numeric literal whose magnitude exceeds Float range (e.g. 1e400) becomes
+    # ±Infinity — a silent data change. Report it via :number_overflow (the value is still
+    # returned; we warn rather than raise or invent). The Infinity/NaN *keywords* go through
+    # a separate path and never reach here, so they don't warn.
+    def float_or_warn(body)
+      f = body.to_f
+      warn(:number_overflow, "number literal out of Float range — collapsed to #{f}") if f.infinite?
+      f
     end
 
     # Count significant mantissa digits (leading zeros excluded, exponent ignored) to pick

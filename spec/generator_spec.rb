@@ -292,6 +292,29 @@ RSpec.describe "SmarterJSON.generate" do
     end
   end
 
+  describe "allow_nan: emit non-finite numbers (opt-in)" do
+    it "raises GenerateError on a non-finite Float by default" do
+      expect { SmarterJSON.generate([Float::INFINITY]) }.to raise_error(SmarterJSON::GenerateError)
+      expect { SmarterJSON.generate([Float::NAN]) }.to raise_error(SmarterJSON::GenerateError)
+    end
+
+    it "emits Infinity / -Infinity / NaN literals when allow_nan: true" do
+      expect(SmarterJSON.generate([Float::INFINITY], allow_nan: true)).to eq("[Infinity]")
+      expect(SmarterJSON.generate([-Float::INFINITY], allow_nan: true)).to eq("[-Infinity]")
+      expect(SmarterJSON.generate([Float::NAN], allow_nan: true)).to eq("[NaN]")
+    end
+
+    it "emits a non-finite BigDecimal too" do
+      expect(SmarterJSON.generate([BigDecimal("Infinity")], allow_nan: true)).to eq("[Infinity]")
+    end
+
+    it "round-trips through process (the read↔write asymmetry this fixes)" do
+      expect(SmarterJSON.process_one(SmarterJSON.generate([Float::INFINITY], allow_nan: true))).to eq([Float::INFINITY])
+      nan = SmarterJSON.process_one(SmarterJSON.generate([Float::NAN], allow_nan: true)).first
+      expect(nan).to be_a(Float).and(be_nan)
+    end
+  end
+
   describe "value validation (every writer option, valid and invalid)" do
     # One source of truth for the writer option/value matrix, mirroring the reader
     # matrix in options_spec.rb. format and the four flags are closed sets; indent
@@ -303,6 +326,7 @@ RSpec.describe "SmarterJSON.generate" do
       script_safe: { valid: [true, false], invalid: [1, "x", nil] },
       sort_keys: { valid: [true, false], invalid: ["x", 0, nil] },
       coerce: { valid: [true, false], invalid: [0, "x", nil] },
+      allow_nan: { valid: [true, false], invalid: ["yes", 1, nil] },
     }
 
     it "the case table covers every known writer option (no option escapes the matrix)" do

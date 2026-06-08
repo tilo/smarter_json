@@ -36,7 +36,7 @@ module SmarterJSON
 
     # Strict configuration: an unknown writer option is a caller bug, so it raises
     # rather than being silently ignored.
-    KNOWN_OPTIONS = %i[format indent ascii_only script_safe sort_keys coerce].freeze
+    KNOWN_OPTIONS = %i[format indent ascii_only script_safe sort_keys coerce allow_nan].freeze
 
     def initialize(options = {})
       unknown = options.keys - KNOWN_OPTIONS
@@ -64,6 +64,7 @@ module SmarterJSON
       @script_safe = boolean_option(options, :script_safe) # escape </ and U+2028 / U+2029
       @sort_keys   = boolean_option(options, :sort_keys)   # emit object keys in sorted order
       @coerce      = boolean_option(options, :coerce)      # convert unknown types via as_json / to_json
+      @allow_nan   = boolean_option(options, :allow_nan)   # emit NaN / Infinity / -Infinity (JSON5) instead of raising
       @escape_re   = build_escape_re
     end
 
@@ -214,15 +215,31 @@ module SmarterJSON
     end
 
     def emit_float(flt, buf)
-      raise SmarterJSON::GenerateError, "SmarterJSON.generate cannot serialize non-finite Float #{flt}" unless flt.finite?
+      unless flt.finite?
+        raise SmarterJSON::GenerateError, "SmarterJSON.generate cannot serialize non-finite Float #{flt}" unless @allow_nan
+
+        return buf << non_finite_literal(flt)
+      end
 
       buf << flt.to_s # Ruby's Float#to_s is shortest round-trippable; e-notation is valid JSON
     end
 
     def emit_bigdecimal(num, buf)
-      raise SmarterJSON::GenerateError, "SmarterJSON.generate cannot serialize non-finite BigDecimal" unless num.finite?
+      unless num.finite?
+        raise SmarterJSON::GenerateError, "SmarterJSON.generate cannot serialize non-finite BigDecimal" unless @allow_nan
+
+        return buf << non_finite_literal(num)
+      end
 
       buf << num.to_s("F") # plain decimal notation (BigDecimal's default "0.1e1" is not valid JSON)
+    end
+
+    # JSON5-style literals for non-finite numbers, emitted only when allow_nan: true.
+    # `infinite?` returns 1 / -1 / nil for both Float and BigDecimal.
+    def non_finite_literal(num)
+      return "NaN" if num.nan?
+
+      num.infinite? == 1 ? "Infinity" : "-Infinity"
     end
   end
 end

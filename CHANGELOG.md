@@ -14,11 +14,16 @@
 > ⚠️ We discourage the use of `process(input).first` / `process(input)[0]` because it silently drops potential additional documents
 >    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads.
 
-## 1.0.0 (unreleased)
+## 1.0.0.pre1 (unreleased)
+
+RSpec tests: 1,034
+
 - **The public interface is now stable** — `process`, `process_one`, `process_file`, `generate`, and the documented options; semantic versioning from here on.
 - Unknown or wrongly-typed options now raise `ArgumentError` instead of being silently ignored, so a typo (e.g. `symbolize_names:` instead of `symbolize_keys:`) is caught immediately.
 - Input tagged `ASCII-8BIT` whose bytes are valid UTF-8 (e.g. a `Net::HTTP` `response.body`) is now read as UTF-8, so its string values compare equal to UTF-8 literals; ASCII-8BIT input that is not valid UTF-8 raises `SmarterJSON::EncodingError` (pass an explicit `encoding:` for legacy encodings).
 - Object keys may now use smart/curly quotes too (e.g. JSON pasted from a word processor), not just string values.
+- `SmarterJSON.generate` accepts `allow_nan: true` to emit `NaN` / `Infinity` / `-Infinity` (JSON5-style) instead of raising, so non-finite numbers round-trip; the default still raises.
+- A numeric literal that overflows `Float` range (e.g. `1e400`) now reports a `:number_overflow` warning via `on_warning` instead of silently becoming `Infinity`.
 
 ## 0.9.9 (2026-06-07)
 - Much faster pure-Ruby parsing (the path used without the C extension) — roughly 3× on string-heavy data, ~2× on number-heavy, ~1.7× on object-heavy (on a YJIT-enabled Ruby). Parsed values are unchanged.

@@ -825,6 +825,35 @@ second"', acceleration: acceleration)).to eq("firstsecond")
             end
           end
 
+          # Smart quotes must behave identically in value position \u2014 these mirror the key
+          # tests above, since both keys and values route through the same parse_smart_string.
+          describe "smart-quoted values (parity with keys)" do
+            it "accepts a smart-quoted value with spaces and multibyte characters" do
+              input = "{\"k\": \u201cna\u00efve value\u201d}"
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "k" => "na\u00efve value" })
+            end
+
+            it "is lenient about smart-quote direction on a value" do
+              input = "{\"k\": \u201dhi\u201c}" # opens U+201D, closes U+201C
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "k" => "hi" })
+            end
+
+            it "accepts an empty smart-quoted value" do
+              input = "{\"k\": \u201c\u201d}"
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "k" => "" })
+            end
+
+            it "accepts a smart single-quoted value" do
+              input = "{\"k\": \u2018hi\u2019}"
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "k" => "hi" })
+            end
+          end
+
+          it "does not support triple-quoted keys (by design \u2014 a multi-line key has no use case)" do
+            expect { SmarterJSON.process_one("{'''k''': 1}", acceleration: acceleration) }
+              .to raise_error(SmarterJSON::ParseError)
+          end
+
           # Regression guards: a smart quote that appears INSIDE an already-open string
           # is content, not a delimiter (the SmarterCSV "separator inside a quoted field"
           # principle). These are GREEN today and must stay green when keys change.
@@ -860,6 +889,39 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           it "parses None as nil" do
             expect(SmarterJSON.process("None", acceleration: acceleration)).to eq([nil])
             expect(SmarterJSON.process_one("None", acceleration: acceleration)).to be_nil
+          end
+        end
+
+        describe "number overflow warning (:number_overflow)" do
+          it "warns when a finite literal overflows Float range to Infinity" do
+            types = []
+            SmarterJSON.process("[1e400]", on_warning: ->(w) { types << w.type }, acceleration: acceleration)
+            expect(types).to eq([:number_overflow])
+          end
+
+          it "warns for negative overflow too" do
+            types = []
+            SmarterJSON.process("[-1e400]", on_warning: ->(w) { types << w.type }, acceleration: acceleration)
+            expect(types).to eq([:number_overflow])
+          end
+
+          it "still returns Infinity — the change is reported, not silent" do
+            expect(SmarterJSON.process_one("[1e400]", acceleration: acceleration)).to eq([Float::INFINITY])
+          end
+
+          it "does NOT warn on a literal Infinity / -Infinity / NaN (intentional, not an overflow)" do
+            types = []
+            SmarterJSON.process("[Infinity, -Infinity, NaN]", on_warning: ->(w) { types << w.type }, acceleration: acceleration)
+            expect(types).to eq([])
+          end
+
+          it "does NOT warn in :bigdecimal mode — the value is preserved, no overflow" do
+            types = []
+            v = SmarterJSON.process_one("[1e400]", decimal_precision: :bigdecimal,
+                                                   on_warning: ->(w) { types << w.type }, acceleration: acceleration)
+            expect(types).to eq([])
+            expect(v.first).to be_a(BigDecimal)
+            expect(v.first.finite?).to be(true)
           end
         end
 

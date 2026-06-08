@@ -40,6 +40,7 @@ static ID    fj_call_id;    /* cached :call (invoking the on_warning handler) */
 static VALUE fj_sym_empty_slot;
 static VALUE fj_sym_empty_value;
 static VALUE fj_sym_duplicate_key;
+static VALUE fj_sym_number_overflow;
 static ID    fj_bigdecimal_id; /* cached BigDecimal() method id (set in Init) */
 static ID    fj_to_sym_id;     /* cached :to_sym (symbolize_keys) */
 static ID    fj_key_p_id;      /* cached :key? (non-default duplicate_key modes) */
@@ -581,7 +582,8 @@ static VALUE fj_float_strtod(const char *p, long n) {
 }
 
 /* e10 is the final base-10 exponent (already adjusted by the fraction length). */
-static FJ_ALWAYS_INLINE VALUE fj_float_from_parts(uint64_t m10, int m10digits, int64_t e10, int neg, int overflow, const char *p, long n) {
+static FJ_ALWAYS_INLINE VALUE fj_float_from_parts(fj_state *st, uint64_t m10, int m10digits, int64_t e10, int neg, int overflow, const char *p, long n) {
+  double d;
   /* Fast path by mantissa width (our scanner accumulates m10 exactly up to 18
      digits, flagging overflow beyond):
        1..18 digits -> Eisel-Lemire, correctly-rounded for any exact uint64 mantissa
@@ -591,10 +593,16 @@ static FJ_ALWAYS_INLINE VALUE fj_float_from_parts(uint64_t m10, int m10digits, i
      >18 digits / overflow / extreme exponent -> strtod (round-to-odd). */
   if (!overflow && m10digits >= 1 && m10digits <= 18 && (long)m10digits + e10 >= -307) {
     if (m10 == 0) return rb_float_new(neg ? -0.0 : 0.0);
-    return rb_float_new(fj_eisel_lemire_s2d(e10, m10, neg));
+    d = fj_eisel_lemire_s2d(e10, m10, neg);
+  } else {
+    /* Fallback for >18 digits / extreme or subnormal exponents. */
+    d = RFLOAT_VALUE(fj_float_strtod(p, n));
   }
-  /* Fallback for >18 digits / extreme or subnormal exponents. */
-  return fj_float_strtod(p, n);
+  /* A finite literal whose magnitude exceeds Float range (e.g. 1e400) becomes
+     ±Infinity — a silent data change. Report it via :number_overflow (the value is
+     still returned). The Infinity/NaN keywords take separate paths and never get here. */
+  if (isinf(d)) fj_warn(st, fj_sym_number_overflow, "number literal out of Float range — collapsed to Infinity");
+  return rb_float_new(d);
 }
 
 /* Scan an already-bounded quoteless token [p, p+n) exactly once: validate it as a
@@ -679,7 +687,7 @@ static int fj_try_decimal(fj_state *st, const char *p, long n, VALUE *out) {
       (st->decimal_precision == 1 && m10digits > 16 && fj_sig_digits(p, n) > 16)) {
     *out = fj_to_bigdecimal_token(p, n);
   } else {
-    *out = fj_float_from_parts(m10, m10digits, e10, neg, overflow, p, n);
+    *out = fj_float_from_parts(st, m10, m10digits, e10, neg, overflow, p, n);
   }
   return 1;
 }
@@ -791,7 +799,7 @@ static VALUE fj_parse_number(fj_state *st) {
       (st->decimal_precision == 1 && m10digits > 16 && fj_sig_digits(np, nlen) > 16)) {
     return fj_to_bigdecimal_token(np, nlen);
   }
-  return fj_float_from_parts(m10, m10digits, e10, neg, overflow, np, nlen);
+  return fj_float_from_parts(st, m10, m10digits, e10, neg, overflow, np, nlen);
 }
 
 static VALUE fj_parse_literal(fj_state *st, const char *word, VALUE value) {
@@ -1206,7 +1214,7 @@ static int fj_try_member_number(fj_state *st, VALUE *out) {
       (st->decimal_precision == 1 && m10digits > 16 && fj_sig_digits(np, nlen) > 16)) {
     *out = fj_to_bigdecimal_token(np, nlen);
   } else {
-    *out = fj_float_from_parts(m10, m10digits, e10, neg, overflow, np, nlen);
+    *out = fj_float_from_parts(st, m10, m10digits, e10, neg, overflow, np, nlen);
   }
   return 1;
 }
@@ -1634,6 +1642,7 @@ void Init_smarter_json(void) {
   fj_sym_empty_slot = ID2SYM(rb_intern("empty_slot"));
   fj_sym_empty_value = ID2SYM(rb_intern("empty_value"));
   fj_sym_duplicate_key = ID2SYM(rb_intern("duplicate_key"));
+  fj_sym_number_overflow = ID2SYM(rb_intern("number_overflow"));
   fj_sym_encoding = ID2SYM(rb_intern("encoding"));
   fj_sym_symbolize_keys = ID2SYM(rb_intern("symbolize_keys"));
   fj_sym_first_wins = ID2SYM(rb_intern("first_wins"));

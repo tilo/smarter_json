@@ -43,7 +43,7 @@ warns.map(&:type)              # => [:empty_slot]
 warns.first.to_s               # => "extra comma, collapsed an empty slot at line 1, col 4"
 ```
 
-The warning types are `:empty_slot` (a collapsed empty comma slot, e.g. `[1,,2]`), `:empty_value` (a key with no value, read as `null`, e.g. `{a:}`), and `:duplicate_key` (a repeated key that was dropped), plus wrapper-recovery warnings such as `:code_fence_stripped`, `:prefix_text_ignored`, `:suffix_text_ignored`, and `:wrapper_tag_stripped`. Clean input never invokes the handler. Warnings work on both the C and pure-Ruby paths, so `acceleration:` doesn't change them.
+The warning types are `:empty_slot` (a collapsed empty comma slot, e.g. `[1,,2]`), `:empty_value` (a key with no value, read as `null`, e.g. `{a:}`), `:duplicate_key` (a repeated key that was dropped), and `:number_overflow` (a numeric literal too large for `Float`, e.g. `1e400`, collapsed to `Infinity`), plus wrapper-recovery warnings such as `:code_fence_stripped`, `:prefix_text_ignored`, `:suffix_text_ignored`, and `:wrapper_tag_stripped`. Clean input never invokes the handler. Warnings work on both the C and pure-Ruby paths, so `acceleration:` doesn't change them.
 
 ### A note on `:encoding`
 
@@ -59,12 +59,13 @@ These options are passed to [`SmarterJSON.generate`](./basic_write_api.md) as th
 
 | Option     | Default | Explanation                                                                                                                |
 |------------|---------|-----------------------------------------------------------------------------------------------------------------------------|
+| `:allow_nan`    | `false` | When `true`, non-finite `Float`/`BigDecimal` values emit the JSON5 barewords `NaN` / `Infinity` / `-Infinity` (which SmarterJSON reads back, so they round-trip). When `false` (the default), a non-finite number raises `SmarterJSON::GenerateError` — they aren't valid strict JSON. |
+| `:ascii_only`   | `false` | Escape every non-ASCII character as `\uXXXX` (astral characters as a UTF-16 surrogate pair). The default emits raw UTF-8. |
+| `:coerce`       | `false` | When `true`, a value that isn't natively supported is converted by its own `as_json` (the result is re-emitted, so the other options still apply) or, failing that, `to_json` (spliced verbatim). When `false` (the default), such a value raises `SmarterJSON::GenerateError`. |
 | `:format`       | `:json` | `:json` writes standard JSON (Hash → object, Array → array, scalar → scalar). `:ndjson` writes newline-delimited JSON: an Array becomes one element per line, any other value becomes a single line. |
 | `:indent`       | `0`     | Spaces per nesting level for pretty-printing. `0` (the default) is compact output. Empty objects/arrays stay inline. Not allowed with `:ndjson` (a record must be a single line). |
-| `:sort_keys`    | `false` | Emit object keys in sorted order (Symbol keys sorted by their string form). Useful for canonical, diff-friendly output. |
-| `:ascii_only`   | `false` | Escape every non-ASCII character as `\uXXXX` (astral characters as a UTF-16 surrogate pair). The default emits raw UTF-8. |
 | `:script_safe`  | `false` | Escape the `/` in `</` and the JS line separators U+2028 / U+2029, so output is safe to embed in an HTML `<script>` tag. |
-| `:coerce`       | `false` | When `true`, a value that isn't natively supported is converted by its own `as_json` (the result is re-emitted, so the other options still apply) or, failing that, `to_json` (spliced verbatim). When `false` (the default), such a value raises `SmarterJSON::GenerateError`. |
+| `:sort_keys`    | `false` | Emit object keys in sorted order (Symbol keys sorted by their string form). Useful for canonical, diff-friendly output. |
 
 Configuration is validated up front: an unknown option key, a known key with the wrong type or value (a non-Symbol `:format`, a negative/non-Integer `:indent`, a non-boolean flag), or combining `:indent` with `:ndjson`, raises `ArgumentError`.
 

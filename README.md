@@ -201,7 +201,7 @@ In short: **SmarterJSON's C path matches or beats Oj/strict on every file** (app
 | `decimal_precision` | `:auto`      | `:auto` keeps high-precision decimals as `BigDecimal`; `:float` forces `Float`; `:bigdecimal` forces `BigDecimal` |
 | `acceleration`    | `true`       | `true` uses the C extension when compiled and loadable; `false` forces pure Ruby (identical results) |
 | `encoding`        | `nil`        | labels the input's encoding; `nil` keeps the input's own (no transcoding pass; see below) |
-| `on_warning`      | `nil`        | a callable invoked once per lenient fix applied (`:empty_slot`, `:empty_value`, `:duplicate_key`), passed a `SmarterJSON::Warning`; the return value is never changed. See below. |
+| `on_warning`      | `nil`        | a callable invoked once per lenient fix applied (`:empty_slot`, `:empty_value`, `:duplicate_key`, `:number_overflow`), passed a `SmarterJSON::Warning`; the return value is never changed. See below. |
 
 ## Examples
 
