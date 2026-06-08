@@ -24,6 +24,7 @@ RSpec tests: 1,034
 - Object keys may now use smart/curly quotes too (e.g. JSON pasted from a word processor), not just string values.
 - `SmarterJSON.generate` accepts `allow_nan: true` to emit `NaN` / `Infinity` / `-Infinity` (JSON5-style) instead of raising, so non-finite numbers round-trip; the default still raises.
 - A numeric literal that overflows `Float` range (e.g. `1e400`) now reports a `:number_overflow` warning via `on_warning` instead of silently becoming `Infinity`.
+- `SmarterJSON.generate` is now iterative (like the parser), so serializing a deeply nested structure no longer risks `SystemStackError` — reading and writing are both depth-safe.
 
 ## 0.9.9 (2026-06-07)
 - Much faster pure-Ruby parsing (the path used without the C extension) — roughly 3× on string-heavy data, ~2× on number-heavy, ~1.7× on object-heavy (on a YJIT-enabled Ruby). Parsed values are unchanged.

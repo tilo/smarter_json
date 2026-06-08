@@ -299,7 +299,7 @@ TEXT
 
 ## Nesting & untrusted input
 
-Both the C extension and the pure-Ruby engine are **iterative, not recursive** — they track nesting on an explicit, heap-allocated stack rather than the call stack. So deeply nested input **cannot overflow the call stack or segfault**: nesting is bounded only by available memory, the same posture as Oj (which also ships no nesting limit; the stdlib `json` caps at 100). The `deeply_nested.json` benchmark (212 MB of nesting) is handled without issue.
+Both the C extension and the pure-Ruby engine are **iterative, not recursive** — they track nesting on an explicit, heap-allocated stack rather than the call stack. So deeply nested input **cannot overflow the call stack or segfault**: nesting is bounded only by available memory, the same posture as Oj (which also ships no nesting limit; the stdlib `json` caps at 100). The `deeply_nested.json` benchmark (212 MB of nesting) is handled without issue. **`generate` is iterative too**, so serializing a deeply nested Ruby structure can't overflow the stack either — reading *and* writing are both depth-safe.
 
 The trade-off: there is currently **no fixed nesting or input-size limit**, so extremely large or adversarially-nested untrusted input is bounded by memory (it can exhaust RAM), not by a crash. If you process untrusted input and want a hard cap, that's a planned opt-in guard — for now, size-limit upstream.
 

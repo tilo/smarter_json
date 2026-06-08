@@ -97,7 +97,39 @@ module SmarterJSON
       raise ArgumentError, "#{key} must be true or false (got #{value.inspect})"
     end
 
-    def emit(obj, buf, level = 0)
+    # Iterative serializer — an explicit frame stack (one frame per open container),
+    # mirroring the recursive structure but heap-allocated, so arbitrarily deep input
+    # cannot overflow the call stack (parity with the iterative parser). Output is
+    # byte-identical to the former recursive version. A frame is a small Array:
+    #   [members, idx, is_hash, before_first, before_rest, colon, closer, level]
+    def emit(obj, buf)
+      stack = []
+      push_value(obj, 0, buf, stack)
+      until stack.empty?
+        frame   = stack.last
+        members = frame[0]
+        i       = frame[1]
+        if i == members.length
+          buf << frame[6] # closer
+          stack.pop
+          next
+        end
+        frame[1] = i + 1
+        buf << (i.zero? ? frame[3] : frame[4]) # opener-pad / separator-pad
+        if frame[2] # hash
+          k, v = members[i]
+          emit_string(k.is_a?(String) ? k : k.to_s, buf) # Symbol/other keys -> string
+          buf << frame[5] # colon
+          push_value(v, frame[7] + 1, buf, stack)
+        else
+          push_value(members[i], frame[7] + 1, buf, stack)
+        end
+      end
+    end
+
+    # Emit one value at `level`: a scalar appends directly; a non-empty container writes
+    # its opener and pushes a frame for the driver above to walk (no recursion into it).
+    def push_value(obj, level, buf, stack)
       case obj
       when nil        then buf << "null"
       when true       then buf << "true"
@@ -107,22 +139,30 @@ module SmarterJSON
       when Integer    then buf << obj.to_s
       when Float      then emit_float(obj, buf)
       when BigDecimal then emit_bigdecimal(obj, buf)
-      when Array      then emit_array(obj, buf, level)
-      when Hash       then emit_hash(obj, buf, level)
+      when Array
+        return buf << "[]" if obj.empty? # empty stays inline, even in pretty mode
+
+        buf << (@pretty ? "[\n" : "[")
+        stack << container_frame(obj, false, level)
+      when Hash
+        return buf << "{}" if obj.empty? # empty stays inline, even in pretty mode
+
+        pairs = @sort_keys ? obj.sort_by { |k, _| k.is_a?(String) ? k : k.to_s } : obj.to_a
+        buf << (@pretty ? "{\n" : "{")
+        stack << container_frame(pairs, true, level)
       else
-        return emit_coerced(obj, buf, level) if @coerce
+        return push_coerced(obj, level, buf, stack) if @coerce
 
         raise SmarterJSON::GenerateError, "SmarterJSON.generate cannot serialize #{obj.class}"
       end
     end
 
-    # coerce: true — let a value that isn't natively supported convert itself.
-    # Prefer as_json (its result is re-emitted through the normal pipeline, so the
-    # escaping/format options still apply); fall back to to_json (spliced as-is, so
-    # ascii_only / script_safe do not reach inside it). Raise if it defines neither.
-    def emit_coerced(obj, buf, level)
+    # coerce: true — prefer as_json (re-emitted through the normal pipeline, so the
+    # escaping/format options still apply); else to_json (spliced as-is, so ascii_only /
+    # script_safe do not reach inside it); else raise.
+    def push_coerced(obj, level, buf, stack)
       if obj.respond_to?(:as_json)
-        emit(obj.as_json, buf, level)
+        push_value(obj.as_json, level, buf, stack)
       elsif obj.respond_to?(:to_json)
         buf << obj.to_json
       else
@@ -130,57 +170,16 @@ module SmarterJSON
       end
     end
 
-    def emit_array(arr, buf, level)
-      return buf << "[]" if arr.empty? # empty stays inline, even in pretty mode
-
+    # Build a frame for an open container at `level`, precomputing its punctuation/indent
+    # once (as the recursive version computed `pad` once per container).
+    def container_frame(members, is_hash, level)
+      close_glyph = is_hash ? "}" : "]"
       if @pretty
-        pad = " " * (@indent * (level + 1))
-        buf << "[\n"
-        arr.each_with_index do |v, i|
-          buf << ",\n" unless i.zero?
-          buf << pad
-          emit(v, buf, level + 1)
-        end
-        buf << "\n" << (" " * (@indent * level)) << "]"
+        pad  = " " * (@indent * (level + 1))
+        padl = " " * (@indent * level)
+        [members, 0, is_hash, pad, ",\n#{pad}", ": ", "\n#{padl}#{close_glyph}", level]
       else
-        buf << "["
-        arr.each_with_index do |v, i|
-          buf << "," unless i.zero?
-          emit(v, buf, level)
-        end
-        buf << "]"
-      end
-    end
-
-    def emit_hash(hash, buf, level)
-      return buf << "{}" if hash.empty? # empty stays inline, even in pretty mode
-
-      pairs = @sort_keys ? hash.sort_by { |k, _| k.is_a?(String) ? k : k.to_s } : hash
-
-      if @pretty
-        pad = " " * (@indent * (level + 1))
-        buf << "{\n"
-        first = true
-        pairs.each do |k, v|
-          buf << ",\n" unless first
-          first = false
-          buf << pad
-          emit_string(k.is_a?(String) ? k : k.to_s, buf) # Symbol/other keys -> string
-          buf << ": "
-          emit(v, buf, level + 1)
-        end
-        buf << "\n" << (" " * (@indent * level)) << "}"
-      else
-        buf << "{"
-        first = true
-        pairs.each do |k, v|
-          buf << "," unless first
-          first = false
-          emit_string(k.is_a?(String) ? k : k.to_s, buf) # Symbol/other keys -> string
-          buf << ":"
-          emit(v, buf, level)
-        end
-        buf << "}"
+        [members, 0, is_hash, "", ",", ":", close_glyph, level]
       end
     end
 

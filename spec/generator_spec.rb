@@ -363,4 +363,49 @@ RSpec.describe "SmarterJSON.generate" do
         .to raise_error(ArgumentError, /unknown option.*pretty/i)
     end
   end
+
+  # The parser is iterative (handles 212 MB of nesting); the generator must match —
+  # deeply nested Ruby structures must not blow the call stack with SystemStackError.
+  describe "deep nesting (iterative generator — no stack overflow)" do
+    it "generates a deeply nested array" do
+      arr = []
+      cur = arr
+      100_000.times do
+        nxt = []
+        cur << nxt
+        cur = nxt
+      end
+      out = SmarterJSON.generate(arr)
+      expect(out.start_with?("[" * 100)).to be(true)
+      expect(out.end_with?("]" * 100)).to be(true)
+    end
+
+    it "generates a deeply nested hash" do
+      h = {}
+      cur = h
+      100_000.times do
+        nxt = {}
+        cur["k"] = nxt
+        cur = nxt
+      end
+      expect { SmarterJSON.generate(h) }.not_to raise_error
+    end
+
+    it "round-trips deeply nested input (process then generate)" do
+      s = ("[" * 50_000) + ("]" * 50_000)
+      v = SmarterJSON.process_one(s)
+      expect { SmarterJSON.generate(v) }.not_to raise_error
+    end
+
+    it "deep nesting with indent: 2 also works (pretty path)" do
+      arr = []
+      cur = arr
+      20_000.times do
+        nxt = []
+        cur << nxt
+        cur = nxt
+      end
+      expect { SmarterJSON.generate(arr, indent: 2) }.not_to raise_error
+    end
+  end
 end
