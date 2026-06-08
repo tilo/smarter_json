@@ -1240,6 +1240,12 @@ module SmarterJSON
       b = byte
       return parse_string(DQUOTE) if b == DQUOTE
       return parse_string(SQUOTE) if b == SQUOTE
+
+      # A key may open with a smart/curly quote too (word-processor paste curls keys,
+      # not just values) — route to the same reader values already use.
+      kind = smart_quote_kind(@pos)
+      return parse_smart_string(kind) if kind
+
       raise error("expected a key") unless b && key_start_byte?(b)
 
       parse_identifier_key

@@ -726,8 +726,16 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
 
         describe "smart / curly quotes" do
+          # Quote codepoints used in the inputs below, written as \u escapes because the
+          # glyphs are visually near-identical to straight quotes (and this file's save
+          # hook rewrites any literal glyph back to its \u escape \u2014 so the Unicode NAME,
+          # not a pasted glyph, is the reliable identifier):
+          #   \u201C  LEFT  DOUBLE QUOTATION MARK   (open curly double)
+          #   \u201D  RIGHT DOUBLE QUOTATION MARK   (close curly double)
+          #   \u2018  LEFT  SINGLE QUOTATION MARK   (open curly single)
+          #   \u2019  RIGHT SINGLE QUOTATION MARK   (close curly single, also the typographic apostrophe)
+          #   \u00EF  LATIN SMALL LETTER I WITH DIAERESIS   (the i in the "naive" key)
           it "accepts curly double quotes as regular double quotes" do
-            # U+201C LEFT DOUBLE QUOTATION MARK, U+201D RIGHT DOUBLE QUOTATION MARK
             input = "{\"a\": \u201Chello\u201D}"
             expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{ "a" => "hello" }])
             expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "a" => "hello" })
@@ -738,6 +746,103 @@ second"', acceleration: acceleration)).to eq("firstsecond")
             input = "{a: \u2018hello\u2019}"
             expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([{ "a" => "hello" }])
             expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "a" => "hello" })
+          end
+
+          it "keeps curly quotes that appear INSIDE a straight-quoted string as content" do
+            # {"quote": "Hello \u201cworld\u201d"} \u2014 the curly quotes (U+201C/U+201D) sit inside a
+            # straight double-quoted value, so they are literal content, not delimiters.
+            # Same principle as a col_sep inside a quoted CSV field in SmarterCSV: once a
+            # string is open, only its own closer (here the straight ") ends it.
+            input    = "{\"quote\": \"Hello \u201cworld\u201d\"}"
+            expected = { "quote" => "Hello \u201cworld\u201d" }
+            expect(SmarterJSON.process(input, acceleration: acceleration)).to eq([expected])
+            expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq(expected)
+          end
+
+          # The word-processor paste curls the KEYS too, not just the values \u2014 these
+          # are RED until smart quotes are accepted in key position (Ruby + C).
+          describe "smart-quoted keys" do
+            it "accepts a smart double-quoted key" do
+              input = "{\u201cname\u201d: \"Tilo\"}"
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "name" => "Tilo" })
+            end
+
+            it "accepts a smart single-quoted key" do
+              input = "{\u2018name\u2019: \"Tilo\"}"
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "name" => "Tilo" })
+            end
+
+            it "accepts smart quotes on BOTH key and value" do
+              input = "{\u201cname\u201d: \u201cTilo\u201d}"
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "name" => "Tilo" })
+            end
+
+            it "accepts a smart double key with a smart single value (mixed styles)" do
+              input = "{\u201cname\u201d: \u2018Tilo\u2019}"
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "name" => "Tilo" })
+            end
+
+            it "accepts multiple smart-quoted keys in one object" do
+              input = "{\u201ca\u201d: 1, \u201cb\u201d: 2}"
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "a" => 1, "b" => 2 })
+            end
+
+            it "accepts a smart-quoted key in a nested object" do
+              input = "{\"outer\": {\u201cinner\u201d: 1}}"
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "outer" => { "inner" => 1 } })
+            end
+
+            it "accepts a smart-quoted key containing spaces and multibyte characters" do
+              input = "{\u201cna\u00efve key\u201d: 1}"
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "na\u00efve key" => 1 })
+            end
+
+            it "is lenient about smart-quote direction on a key" do
+              # opens with the RIGHT curly (U+201D), closes with the LEFT (U+201C)
+              input = "{\u201dname\u201c: 1}"
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "name" => 1 })
+            end
+
+            it "symbolizes a smart-quoted key when symbolize_keys: true" do
+              input = "{\u201cname\u201d: 1}"
+              expect(SmarterJSON.process_one(input, symbolize_keys: true, acceleration: acceleration)).to eq({ name: 1 })
+            end
+
+            it "accepts an empty smart-quoted key" do
+              input = "{\u201c\u201d: 1}"
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "" => 1 })
+            end
+
+            it "handles a smart-quoted key AND curly content inside a straight-quoted value" do
+              input    = "{\u201cquote\u201d: \"Hello \u201cworld\u201d\"}"
+              expected = { "quote" => "Hello \u201cworld\u201d" }
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq(expected)
+            end
+
+            it "raises on an unterminated smart-quoted key" do
+              expect { SmarterJSON.process_one("{\u201cname: 1}", acceleration: acceleration) }
+                .to raise_error(SmarterJSON::ParseError)
+            end
+          end
+
+          # Regression guards: a smart quote that appears INSIDE an already-open string
+          # is content, not a delimiter (the SmarterCSV "separator inside a quoted field"
+          # principle). These are GREEN today and must stay green when keys change.
+          describe "smart quotes stay content inside an already-open string" do
+            it "keeps a smart apostrophe inside a straight-quoted string" do
+              input = "{\"msg\": \"I don\u2019t know\"}"
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "msg" => "I don\u2019t know" })
+            end
+
+            it "keeps a smart apostrophe inside a smart-quoted string" do
+              input = "{\"msg\": \u201cI don\u2019t know\u201d}"
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "msg" => "I don\u2019t know" })
+            end
+
+            it "keeps straight double quotes inside a smart-quoted string" do
+              input = "{\"msg\": \u201cHe said \"hi\" loudly\u201d}"
+              expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "msg" => "He said \"hi\" loudly" })
+            end
           end
         end
 

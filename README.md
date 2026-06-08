@@ -62,7 +62,7 @@ Three things set it apart:
 - Trailing commas; unquoted keys (`{host: localhost}`); single-quoted, triple-quoted (`'''…'''`), and quoteless string values
 - Implicit root object — a config file that starts with `key: value`, no outer `{}`
 - `NaN`, `Infinity`, hex (`0xFF`), leading `+` / `.`, underscores in numbers (`1_000_000`)
-- UTF-8 BOM, smart/curly quotes, Python literals (`True` / `False` / `None`), JavaScript `undefined`
+- UTF-8 BOM, smart/curly quotes (in keys and values), Python literals (`True` / `False` / `None`), JavaScript `undefined`
 - Mixed CR / LF / CRLF line endings, and any Ruby-supported input encoding (via `encoding:`)
 - Duplicate keys (last value wins by default; configurable)
 

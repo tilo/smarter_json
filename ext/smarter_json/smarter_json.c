@@ -262,6 +262,8 @@ static inline int fj_needs_ws_skip(int b) {
 /* forward declarations (mutual recursion) */
 static VALUE fj_parse_value(fj_state *st);
 static VALUE fj_parse_member_value(fj_state *st);
+static int   fj_smart_quote_kind(fj_state *st);
+static VALUE fj_parse_smart_string(fj_state *st, int kind);
 
 static void fj_append_utf8(VALUE buf, unsigned long cp) {
   char tmp[4];
@@ -842,6 +844,7 @@ static VALUE fj_parse_identifier_key(fj_state *st) {
 
 static VALUE fj_parse_object_key(fj_state *st) {
   int b = fj_byte(st);
+  int kind;
 
   /* Quoted key. The common case has no escapes: intern straight from the buffer
    * with no throwaway allocation. An escaped key (rare) falls through to the
@@ -861,6 +864,12 @@ static VALUE fj_parse_object_key(fj_state *st) {
     }
     return fj_parse_string(st, b);
   }
+
+  /* A key may open with a smart/curly quote too (a word-processor paste curls the
+   * keys, not just the values) — route to the same reader the value path uses.
+   * Mirrors the Ruby fallback's parse_object_key; Hash#[]= dedups the key on store. */
+  kind = fj_smart_quote_kind(st);
+  if (kind) return fj_parse_smart_string(st, kind);
 
   if (fj_is_key_start(b)) return fj_parse_identifier_key(st);
 
