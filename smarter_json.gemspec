@@ -9,9 +9,9 @@ Gem::Specification.new do |spec|
   spec.version       = SmarterJSON::VERSION
   spec.date          = Time.now.utc.strftime('%Y-%m-%d')
   spec.license       = 'MIT'
-  spec.summary = 'A lenient, fast JSON processor for Ruby — reads strict JSON, NDJSON, JSON5, HJSON, and the messy JSON humans and LLMs actually write.'
+  spec.summary = 'A lenient, fast JSON processor for Ruby — reads strict JSON, NDJSON, JSONL, JSON5, HJSON, and the messy JSON humans and LLMs actually write.'
   spec.description = <<~DESC
-    A lenient, fast JSON processor for Ruby. It extracts strict JSON, NDJSON, JSON5, HJSON-style config, and the messy JSON-ish input humans and LLMs actually write — comments, trailing commas, single / unquoted / smart quotes, Python and JS keywords, a UTF-8 BOM, and more all parse to the same Ruby objects, with no modes or flags to set. Where a traditional parser stops at the first deviation and throws away the whole document, SmarterJSON keeps going — it optimizes for getting your data out, not for policing the JSON spec. It reads multi-document NDJSON / JSONL in one call (and streams it with a block), and in benchmarks its C extension matches or beats Oj on nearly every file. SmarterJSON is opinionated: we want your JSON processing to be successful.
+    A lenient, fast JSON processor for Ruby. It extracts strict JSON, NDJSON, JSONL, JSON5, HJSON-style config, and the messy JSON-ish input humans and LLMs actually write — comments, trailing commas, single / unquoted / smart quotes, Python and JS keywords, a UTF-8 BOM, and more all parse to the same Ruby objects, with no modes or flags to set. Where a traditional parser stops at the first deviation and throws away the whole document, SmarterJSON keeps going — it optimizes for getting your data out, not for policing the JSON spec. It reads multi-document NDJSON / JSONL in one call (and streams it with a block), and in benchmarks its C extension matches or beats Oj on nearly every file. SmarterJSON is opinionated: we want your JSON processing to be successful.
   DESC
 
   spec.homepage = "https://github.com/tilo/smarter_json"
