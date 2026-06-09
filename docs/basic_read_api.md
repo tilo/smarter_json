@@ -103,6 +103,28 @@ SmarterJSON.process(io) { |doc| handle(doc) }
 
 The streaming path now frames whole top-level documents, not just one line at a time. That means NDJSON / JSONL still work, but pretty-printed multi-line objects and arrays work too, as do mixed `\n` / `\r\n` / `\r` line endings and comment-only separators between documents.
 
+## `SmarterJSON.foreach` — stream a file or IO, composably
+
+`foreach` is the composable sibling of `process_file`. Its argument is a **file path or any IO** (a socket, a `StringIO`, an open `File`); a String is always a path, never content.
+
+With a block it behaves exactly like the block form above — streams each document, returns the **document count**. Without a block it returns a plain `Enumerator` (like `CSV.foreach` — **not** an `Enumerator::Lazy`), so `.map` / `.select` return Arrays the usual way, and you can chain over the stream:
+
+```ruby
+SmarterJSON.foreach("events.ndjson").each { |event| EventJob.perform_async(event) }   # like the block form
+SmarterJSON.foreach("events.ndjson").select { |e| e["level"] == "error" }              # => an Array of the matches
+```
+
+It reads one document at a time, so `foreach(path).first(3)` only reads ~3 documents off disk, and `.next` pulls them one by one. `.map` / `.select` read the source lazily but still build an Array of their *result*; to keep a whole pipeline bounded end to end (a large filtered set off a fat file), add `.lazy` at the call site:
+
+```ruby
+SmarterJSON.foreach("session.jsonl", symbolize_keys: true)
+           .lazy
+           .select { |doc| %w[user assistant].include?(doc[:type]) }
+           .each   { |doc| puts doc[:text] }
+```
+
+Options are validated eagerly — a bad option key or value raises immediately, before any iteration. An **IO source is single-pass** (an IO can only be read once), so iterating the returned Enumerator a second time over the same IO yields nothing; a path-backed `foreach` re-opens the file and is re-iterable.
+
 ## The C extension and the pure-Ruby fallback
 
 By default (`acceleration: true`) the C extension is used when it is compiled and loadable (`SmarterJSON::HAS_ACCELERATION` is then `true`); otherwise the pure-Ruby implementation runs and produces identical results. Pass `acceleration: false` to force the pure-Ruby path. See [Configuration Options](./options.md).
