@@ -243,6 +243,17 @@ For input larger than memory, pass a block: each document is yielded as it is re
 SmarterJSON.process_file("events.ndjson") { |event| EventJob.perform_async(event) }
 ```
 
+**Try it on a file you already have.** SmarterJSON reads **NDJSON / JSONL natively** — and Claude Code stores every session as a JSONL transcript (`~/.claude/projects/<project>/<session-id>.jsonl`, one JSON document per line). Walk yours, one record at a time:
+
+```ruby
+require "awesome_print" # optional — readable nested output
+
+SmarterJSON.process_file("#{Dir.home}/.claude/projects/<project>/<session-id>.jsonl") do |entry|
+  ap entry              # each line is a full document — a message, a tool call, a result, …
+  puts "-" * 80
+end
+```
+
 ### Recovering JSON from LLM / markdown noise
 
 When the payload is wrapped in markdown fences, surrounding prose, or tags, `process` (or `process_one` for a single payload) strips the wrapper and reads what's inside. (Clean JSON never pays for this — recovery only runs when a straight read fails.)
