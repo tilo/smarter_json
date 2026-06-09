@@ -14,7 +14,7 @@
 > ⚠️ We discourage the use of `process(input).first` / `process(input)[0]` because it silently drops potential additional documents
 >    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads.
 
-## 1.0.0.pre1 (unreleased)
+## 1.0.0 (2026-06-08)
 
 RSpec tests: 1,034
 
