@@ -83,6 +83,17 @@ For input larger than memory, pass a block. Each recovered document is yielded o
 SmarterJSON.process_file("events.ndjson") { |event| EventJob.perform_async(event) }
 ```
 
+**A JSONL file you already have:** Claude Code stores each session as a JSONL transcript — `~/.claude/projects/<project>/<session-id>.jsonl`, one JSON document per line (a message, a tool call, a result, …). It reads the same way, one record at a time:
+
+```ruby
+require "awesome_print" # optional — for readable nested output
+
+SmarterJSON.process_file("#{Dir.home}/.claude/projects/<project>/<session-id>.jsonl") do |entry|
+  ap entry              # each line is a full document
+  puts "-" * 80
+end
+```
+
 ### Example 6: Symbolize Keys
 
 ```ruby

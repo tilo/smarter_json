@@ -1,15 +1,13 @@
 
 # SmarterJSON Change Log
 
-> ⚠️ **New Interface (since 0.9.7):**
->
-> SmarterJSON **always returns an `Array`** of documents.
+> ⚠️ SmarterJSON **always returns an `Array`** of documents.
 > 
 > `SmarterJSON.process` / `SmarterJSON.process_file` return:
 >
-> — `[]` for no doc
-> - `[doc]` for one doc
-> - `[d1, d2, …]` for several docs (NDJSON / JSONL / concatenated docs)
+>   — `[]` for no doc
+>   - `[doc]` for one doc
+>   - `[d1, d2, …]` for several docs (NDJSON / JSONL / concatenated docs)
 
 > ⚠️ We discourage the use of `process(input).first` / `process(input)[0]` because it silently drops potential additional documents
 >    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads.
@@ -20,7 +18,7 @@
 
 ## 1.0.0 (2026-06-08)
 
-RSpec tests: 1,034
+RSpec tests: 1,038
 
 - **The public interface is now stable** — `process`, `process_one`, `process_file`, `generate`, and the documented options; semantic versioning from here on.
 - Unknown or wrongly-typed options now raise `ArgumentError` instead of being silently ignored, so a typo (e.g. `symbolize_names:` instead of `symbolize_keys:`) is caught immediately.
