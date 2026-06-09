@@ -6,6 +6,17 @@ A lenient, fast JSON processor for Ruby. It extracts strict JSON, NDJSON, JSONL,
 
 > **SmarterJSON: one tool, no modes — want strict? Please use the stdlib `json` gem.**
 
+## Features at a glance
+
+- **Reads the whole human-JSON superset, no modes or flags** — strict JSON, NDJSON, JSONL, JSON5, HJSON, JSONC, plus comments, trailing commas, unquoted / single / triple / smart quotes, an implicit root object, `NaN` / `Infinity` / hex / underscores, Python & JavaScript literals, a UTF-8 BOM, mixed line endings, and any Ruby encoding (see [What it accepts](#what-it-accepts-beyond-strict-json) for the full list).
+- **Every document from multi-document input, in one call** — `process` returns an `Array` of all of them; `process_one` returns the single value and warns if there was more than one (never raises; routed to `on_warning`, else `Rails.logger`, else `Kernel.warn`).
+- **Streaming in bounded memory** — pass a block, or use `foreach(path_or_io)` for a composable `Enumerator` you can `.select` / `.map` / `.lazy` over.
+- **Recovers JSON from LLM / markdown noise** — strips markdown code fences, surrounding prose, and `<json>` tags, and pulls every payload out of one messy blob.
+- **Writes JSON too** — `generate` with pretty-printing, NDJSON, `sort_keys`, `ascii_only`, `script_safe`, `allow_nan`, and `coerce` (via `as_json`); iterative, so deeply nested data is depth-safe.
+- **Keeps number precision** — `BigDecimal` by default (Oj-compatible), or `:float` / `:auto`.
+- **Transparent leniency** — pass an optional `on_warning` callback to be handed every lenient fix (an empty slot collapsed, a duplicate key dropped, a code fence stripped, …); with no handler the parser stays silent and adds zero overhead.
+- **Fast, and runs everywhere** — a C extension that matches or beats Oj, with a pure-Ruby fallback for platforms that can't build it. Stable, semantically versioned, thread-safe, Ruby 2.6+.
+
 ## Why SmarterJSON?
 
 **Are you tired of seeing errors like these?**
@@ -73,12 +84,14 @@ It raises only on genuinely unreadable input (unterminated string, mismatched br
 The lenient grammar is a superset of these human-JSON specs — listed once, here:
 
 * [JSON5](https://json5.org/)
-* [HJSON](https://hjson.github.io/)
+* [HJSON](https://hjson.github.io/) <sup>†</sup>
 * [JWCC / HuJSON](https://github.com/tailscale/hujson)
 * [Nigel Tao](https://nigeltao.github.io/blog/2021/json-with-commas-comments.html)
 * [JSONH](https://github.com/jsonh-org/Jsonh)
 * [JSONC (VS Code)](https://jsonc.org/)
 * [NDJSON / JSON Text Sequences (RFC 7464)](https://datatracker.ietf.org/doc/html/rfc7464).
+
+<sup>†</sup> A deliberate subset. SmarterJSON's quoteless (unquoted) string values are single-line — it does **not** parse HJSON's unquoted multi-line strings; use a quoted or triple-quoted (`'''…'''`) string for multiline. This is by design: SmarterJSON is one deterministic, no-modes superset of the JSON-family dialects (JSON5 / HJSON / JSONC / …), so it adopts a feature only where it does not conflict with the others — and an unquoted string that may span newlines collides with newline-as-a-document-separator (NDJSON, implicit-root config), so it is left out.
 
 ## Installation
 
