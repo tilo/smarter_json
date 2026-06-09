@@ -57,29 +57,39 @@ module SmarterJSON
     end
   end
 
-  # SmarterJSON.foreach(path, options = {}) — the streaming, composable sibling of
+  # SmarterJSON.foreach(source, options = {}) — the streaming, composable sibling of
   # process_file, mirroring the stdlib convention (CSV.foreach / File.foreach): a
   # plain Enumerator (NOT Enumerator::Lazy), so .map / .select behave the normal way
   # and return an Array.
   #
-  # Without a block: returns an Enumerator over each top-level document, reading the
-  # file one document at a time via File.open/readpartial — it never slurps the whole
-  # file the way process_file(path) does. So foreach(path).first(3) reads only ~3
-  # documents off disk, and foreach(path).each { … } / .next stream in bounded memory.
-  # .map / .select read the source one document at a time but still build an Array of
-  # their result; for a chain that stays bounded end to end (a large filtered set off
-  # a fat file) opt into .lazy at the call site: foreach(path).lazy.select { … }.each { … }.
+  # `source` is a file path (opened and streamed from disk, like process_file) OR an
+  # IO — a socket, a StringIO, an open File — streamed directly from its current
+  # position. A String is always a path, never content. An IO source is single-pass:
+  # it can only be read once, so iterating the returned Enumerator a second time over
+  # the same IO yields nothing.
+  #
+  # Without a block: returns an Enumerator over each top-level document, reading one
+  # document at a time via readpartial — it never slurps the whole file the way
+  # process_file(path) does. So foreach(path).first(3) reads only ~3 documents off
+  # disk, and foreach(src).each { … } / .next stream in bounded memory. .map / .select
+  # read the source one document at a time but still build an Array of their result;
+  # for a chain that stays bounded end to end (a large filtered set off a fat file)
+  # opt into .lazy at the call site: foreach(src).lazy.select { … }.each { … }.
   #
   # With a block: streams each document and returns the document count — identical
-  # to process_file(path) { |doc| … }.
+  # to process_file(path) { |doc| … } (or process(io) { |doc| … } for an IO).
   #
   # Options are validated eagerly (before the Enumerator is returned), so a bad
   # option key or value fails fast rather than on first iteration.
-  def foreach(path, options = {}, &block)
+  def foreach(source, options = {}, &block)
     options = Options.process_options(options)
-    return enum_for(:foreach, path, options) unless block
+    return enum_for(:foreach, source, options) unless block
 
-    process_file(path, options, &block)
+    if source.respond_to?(:read) # an IO (socket, StringIO, open File) — stream it directly
+      stream_io(source, options, &block)
+    else                         # a path — open the file and stream from disk
+      process_file(source, options, &block)
+    end
   end
 
   # SmarterJSON.process_one(input, options = {}) — the single-document accessor.

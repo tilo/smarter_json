@@ -2,12 +2,14 @@
 
 require "smarter_json"
 require "tempfile"
+require "stringio"
 
-# The contract for SmarterJSON.foreach(path) — the lazy, composable sibling of
-# process_file. It mirrors the stdlib convention (CSV.foreach / File.foreach):
+# The contract for SmarterJSON.foreach(source) — the streaming, composable sibling of
+# process_file. `source` is a file path or an IO (StringIO / socket / open File). It
+# mirrors the stdlib convention (CSV.foreach / File.foreach):
 #
-#   foreach(path)               -> a plain Enumerator over each top-level document
-#   foreach(path) { |doc| ... } -> streams each document, returns the document count
+#   foreach(source)               -> a plain Enumerator over each top-level document
+#   foreach(source) { |doc| ... } -> streams each document, returns the document count
 #
 # Eager    : process_file(path)  reads the whole file and returns an Array of documents.
 # Streaming: foreach(path)       reads one document at a time from disk (never slurping
@@ -96,6 +98,44 @@ RSpec.describe SmarterJSON, ".foreach" do
           f.flush
           expect(SmarterJSON.foreach(f.path, acceleration: acceleration).to_a).to eq([{ "only" => true }])
         end
+      end
+
+      # foreach also accepts an IO (a socket, a StringIO, an open File) — the same
+      # source process(io) { … } streams, but composable. A String argument is always
+      # a path (like process_file); an IO is streamed directly.
+      it "accepts an IO (StringIO) and yields each document" do
+        io = StringIO.new(%({"id":1}\n{"id":2}\n{"id":3}\n))
+        expect(SmarterJSON.foreach(io, acceleration: acceleration).to_a)
+          .to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
+      end
+
+      it "streams an IO with a block and returns the document count" do
+        io = StringIO.new(%({"a":1}\n{"b":2}\n))
+        out = []
+        rv = SmarterJSON.foreach(io, acceleration: acceleration) { |doc| out << doc }
+        expect(out).to eq([{ "a" => 1 }, { "b" => 2 }])
+        expect(rv).to eq(2)
+      end
+
+      it "composes (.select / .map) over an IO" do
+        io = StringIO.new(%({"id":1}\n{"id":2}\n{"id":3}\n))
+        odds = SmarterJSON.foreach(io, acceleration: acceleration).select { |d| d["id"].odd? }.map { |d| d["id"] }
+        expect(odds).to eq([1, 3])
+      end
+
+      it "accepts an open File handle as an IO" do
+        io = File.open(ndjson, "r:UTF-8")
+        expect(SmarterJSON.foreach(io, acceleration: acceleration).to_a)
+          .to eq([{ "id" => 1 }, { "id" => 2 }, { "id" => 3 }])
+      ensure
+        io&.close
+      end
+
+      it "an IO source is single-pass (an IO can only be read once)" do
+        io = StringIO.new(%({"id":1}\n{"id":2}\n))
+        enum = SmarterJSON.foreach(io, acceleration: acceleration)
+        expect(enum.to_a).to eq([{ "id" => 1 }, { "id" => 2 }]) # first pass drains the IO
+        expect(enum.to_a).to eq([]) # IO now at EOF — nothing left
       end
     end
   end

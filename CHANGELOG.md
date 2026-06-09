@@ -12,9 +12,11 @@
 > ⚠️ We discourage the use of `process(input).first` / `process(input)[0]` because it silently drops potential additional documents
 >    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads.
 
-## 1.1.0 (unreleased)
+## 1.1.0 (2026-06-09)
 
-- New `SmarterJSON.foreach(path)` — the streaming, composable sibling of `process_file`. Without a block it returns a plain `Enumerator` (like `CSV.foreach`) that reads one document at a time from disk, never loading the whole file, so a large NDJSON / JSONL file can be filtered or transformed with `.select` / `.map` / `.lazy` / `.first`; with a block it streams and returns the document count, like `process_file`.
+RSpec tests: 1,038 → 1,070
+
+- New `SmarterJSON.foreach(source)` — the streaming, composable sibling of `process_file`. `source` is a file path or an IO (a socket, `StringIO`, open `File`). Without a block it returns a plain `Enumerator` (like `CSV.foreach`) that reads one document at a time, never loading the whole file, so a large NDJSON / JSONL stream can be filtered or transformed with `.select` / `.map` / `.lazy` / `.first`; with a block it streams and returns the document count, like `process_file`.
 
 ## 1.0.0 (2026-06-08)
 

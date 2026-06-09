@@ -94,6 +94,17 @@ SmarterJSON.process_file("#{Dir.home}/.claude/projects/<project>/<session-id>.js
 end
 ```
 
+**Filter and rewrite as a stream — `SmarterJSON.foreach`:** `foreach(source)` is the composable sibling of `process_file`; `source` is a file path or any IO (a socket, a `StringIO`, an open `File`). Without a block it returns a plain `Enumerator` (like `CSV.foreach`) that reads one document at a time, so it chains with `.select` / `.map`; add `.lazy` to keep the whole pipeline bounded in memory. This filters a transcript down to its user/assistant turns and writes a smaller file, never loading all of it:
+
+```ruby
+File.open("filtered.jsonl", "w") do |out|
+  SmarterJSON.foreach("session.jsonl", symbolize_keys: true)
+             .lazy
+             .select { |doc| %w[user assistant].include?(doc[:type]) }
+             .each   { |doc| out.puts SmarterJSON.generate(doc) }
+end
+```
+
 ### Example 6: Symbolize Keys
 
 ```ruby

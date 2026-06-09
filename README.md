@@ -130,7 +130,7 @@ See [Examples](#examples) below for multi-document input, streaming, and recover
 
 ## Stable interface & thread safety
 
-The public interface is now considered stable: `SmarterJSON.process`, `SmarterJSON.process_one`, `SmarterJSON.process_file`, `SmarterJSON.generate`, and the documented options in this README/docs are the supported surface.
+The public interface is: `SmarterJSON.process`, `SmarterJSON.process_one`, `SmarterJSON.process_file`, `SmarterJSON.foreach`, `SmarterJSON.generate`, and the documented options in this README/docs are the supported surface. `SmarterJSON.process` and `SmarterJSON.process_file` always return an `Array` of documents; `process_one` returns the single document's value (or `nil`), and emits a warning if there is more than one doc.
 
 Concurrent calls are safe. The processor and generator keep per-call state local, and the C extension only caches Ruby IDs / constants at load time; it does not share mutable state across calls.
 
@@ -252,6 +252,35 @@ SmarterJSON.process_file("#{Dir.home}/.claude/projects/<project>/<session-id>.js
   ap entry              # each line is a full document — a message, a tool call, a result, …
   puts "-" * 80
 end
+```
+
+### Filtering and rewriting a large file (`foreach`)
+
+`SmarterJSON.foreach(source)` is the composable sibling of `process_file`. `source` is a file path or any IO (a socket, a `StringIO`, an open `File`). With no block it returns a plain `Enumerator` (like `CSV.foreach`) that reads one document at a time, so you can chain `.select` / `.map` and friends. Add `.lazy` to keep the whole chain bounded in memory, even when the filtered set is large:
+
+```ruby
+# Keep only the user/assistant turns of a transcript — one document in memory at a time
+SmarterJSON.foreach("session.jsonl", symbolize_keys: true)
+           .lazy
+           .select { |doc| %w[user assistant].include?(doc[:type]) }
+           .each   { |doc| puts doc[:text] }
+```
+
+Because it streams both ends, you can **filter a big file down and rewrite it** without ever loading the whole thing:
+
+```ruby
+File.open("filtered.jsonl", "w") do |out|
+  SmarterJSON.foreach("session.jsonl", symbolize_keys: true)
+             .lazy
+             .select { |doc| %w[user assistant].include?(doc[:type]) }
+             .each   { |doc| out.puts SmarterJSON.generate(doc) }
+end
+```
+
+Pass an IO instead of a path to stream straight from a socket or an HTTP response body — anything `IO`-like works (an IO is single-pass, read once):
+
+```ruby
+SmarterJSON.foreach(response_io).each { |event| handle(event) }
 ```
 
 ### Recovering JSON from LLM / markdown noise
