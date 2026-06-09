@@ -58,7 +58,7 @@ SmarterJSON.generate(Float::INFINITY)   # raises SmarterJSON::GenerateError — 
 SmarterJSON.generate(Float::NAN)        # raises SmarterJSON::GenerateError — non-finite Float
 ```
 
-(`GenerateError` is a kind of `SmarterJSON::Error`, so `rescue SmarterJSON::Error` catches it. `Infinity` and `NaN` are accepted on the *read* side as a leniency, but they are not valid JSON to *write*.)
+(`GenerateError` is a kind of `SmarterJSON::Error`, so `rescue SmarterJSON::Error` catches it. `Infinity` and `NaN` are accepted on the *read* side as a leniency; to *write* them, pass `allow_nan: true` and they're emitted as `NaN` / `Infinity` / `-Infinity` (JSON5-style, so SmarterJSON reads them back) — otherwise non-finite values raise, since they aren't valid strict JSON.)
 
 By default `generate` is strict: it only writes the types above and raises on anything else. To serialize `Time`, `Date`, or your own objects, pass `coerce: true` — an unsupported value is then converted by its own `as_json` (whose result is re-emitted, so escaping/`indent`/`sort_keys` still apply) or, failing that, `to_json` (spliced verbatim):
 

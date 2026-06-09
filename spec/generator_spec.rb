@@ -292,6 +292,29 @@ RSpec.describe "SmarterJSON.generate" do
     end
   end
 
+  describe "allow_nan: emit non-finite numbers (opt-in)" do
+    it "raises GenerateError on a non-finite Float by default" do
+      expect { SmarterJSON.generate([Float::INFINITY]) }.to raise_error(SmarterJSON::GenerateError)
+      expect { SmarterJSON.generate([Float::NAN]) }.to raise_error(SmarterJSON::GenerateError)
+    end
+
+    it "emits Infinity / -Infinity / NaN literals when allow_nan: true" do
+      expect(SmarterJSON.generate([Float::INFINITY], allow_nan: true)).to eq("[Infinity]")
+      expect(SmarterJSON.generate([-Float::INFINITY], allow_nan: true)).to eq("[-Infinity]")
+      expect(SmarterJSON.generate([Float::NAN], allow_nan: true)).to eq("[NaN]")
+    end
+
+    it "emits a non-finite BigDecimal too" do
+      expect(SmarterJSON.generate([BigDecimal("Infinity")], allow_nan: true)).to eq("[Infinity]")
+    end
+
+    it "round-trips through process (the read↔write asymmetry this fixes)" do
+      expect(SmarterJSON.process_one(SmarterJSON.generate([Float::INFINITY], allow_nan: true))).to eq([Float::INFINITY])
+      nan = SmarterJSON.process_one(SmarterJSON.generate([Float::NAN], allow_nan: true)).first
+      expect(nan).to be_a(Float).and(be_nan)
+    end
+  end
+
   describe "value validation (every writer option, valid and invalid)" do
     # One source of truth for the writer option/value matrix, mirroring the reader
     # matrix in options_spec.rb. format and the four flags are closed sets; indent
@@ -303,6 +326,7 @@ RSpec.describe "SmarterJSON.generate" do
       script_safe: { valid: [true, false], invalid: [1, "x", nil] },
       sort_keys: { valid: [true, false], invalid: ["x", 0, nil] },
       coerce: { valid: [true, false], invalid: [0, "x", nil] },
+      allow_nan: { valid: [true, false], invalid: ["yes", 1, nil] },
     }
 
     it "the case table covers every known writer option (no option escapes the matrix)" do
@@ -337,6 +361,51 @@ RSpec.describe "SmarterJSON.generate" do
     it "rejects pretty: true (the option is named indent:) instead of silently ignoring it" do
       expect { SmarterJSON.generate({}, pretty: true) }
         .to raise_error(ArgumentError, /unknown option.*pretty/i)
+    end
+  end
+
+  # The parser is iterative (handles 212 MB of nesting); the generator must match —
+  # deeply nested Ruby structures must not blow the call stack with SystemStackError.
+  describe "deep nesting (iterative generator — no stack overflow)" do
+    it "generates a deeply nested array" do
+      arr = []
+      cur = arr
+      100_000.times do
+        nxt = []
+        cur << nxt
+        cur = nxt
+      end
+      out = SmarterJSON.generate(arr)
+      expect(out.start_with?("[" * 100)).to be(true)
+      expect(out.end_with?("]" * 100)).to be(true)
+    end
+
+    it "generates a deeply nested hash" do
+      h = {}
+      cur = h
+      100_000.times do
+        nxt = {}
+        cur["k"] = nxt
+        cur = nxt
+      end
+      expect { SmarterJSON.generate(h) }.not_to raise_error
+    end
+
+    it "round-trips deeply nested input (process then generate)" do
+      s = ("[" * 50_000) + ("]" * 50_000)
+      v = SmarterJSON.process_one(s)
+      expect { SmarterJSON.generate(v) }.not_to raise_error
+    end
+
+    it "deep nesting with indent: 2 also works (pretty path)" do
+      arr = []
+      cur = arr
+      20_000.times do
+        nxt = []
+        cur << nxt
+        cur = nxt
+      end
+      expect { SmarterJSON.generate(arr, indent: 2) }.not_to raise_error
     end
   end
 end

@@ -176,7 +176,7 @@ Where a like-for-like comparison exists, here is SmarterJSON's C path against ea
 | config.jsonc                  | **1.1× faster** | 1.2× slower                  | **3.6× faster** |
 | deeply_nested                 | **1.2× faster** | **can't parse** <sup>‡</sup> | **4.1× faster** |
 | github_events                 | ≈ tied          | 1.1× slower                  | **2.7× faster** |
-| string_array                  | **1.1× faster** | ≈ tied                       | **1.7× faster** |
+| string_array                  | ≈ tied          | ≈ tied                       | **1.6× faster** |
 | twitter                       | **1.3× faster** | 1.2× slower                  | **3.2× faster** |
 | usgs_earthquakes <sup>≠</sup> | **1.4× faster** | 1.1× slower                  | **3.4× faster** |
 | weather_berlin                | **1.8× faster** | **1.1× faster**              | **3.2× faster** |
@@ -201,7 +201,7 @@ In short: **SmarterJSON's C path matches or beats Oj/strict on every file** (app
 | `decimal_precision` | `:auto`      | `:auto` keeps high-precision decimals as `BigDecimal`; `:float` forces `Float`; `:bigdecimal` forces `BigDecimal` |
 | `acceleration`    | `true`       | `true` uses the C extension when compiled and loadable; `false` forces pure Ruby (identical results) |
 | `encoding`        | `nil`        | labels the input's encoding; `nil` keeps the input's own (no transcoding pass; see below) |
-| `on_warning`      | `nil`        | a callable invoked once per lenient fix applied (`:empty_slot`, `:empty_value`, `:duplicate_key`), passed a `SmarterJSON::Warning`; the return value is never changed. See below. |
+| `on_warning`      | `nil`        | a callable invoked once per lenient fix applied (`:empty_slot`, `:empty_value`, `:duplicate_key`, `:number_overflow`), passed a `SmarterJSON::Warning`; the return value is never changed. See below. |
 
 ## Examples
 
@@ -299,7 +299,7 @@ TEXT
 
 ## Nesting & untrusted input
 
-Both the C extension and the pure-Ruby engine are **iterative, not recursive** — they track nesting on an explicit, heap-allocated stack rather than the call stack. So deeply nested input **cannot overflow the call stack or segfault**: nesting is bounded only by available memory, the same posture as Oj (which also ships no nesting limit; the stdlib `json` caps at 100). The `deeply_nested.json` benchmark (212 MB of nesting) is handled without issue.
+Both the C extension and the pure-Ruby engine are **iterative, not recursive** — they track nesting on an explicit, heap-allocated stack rather than the call stack. So deeply nested input **cannot overflow the call stack or segfault**: nesting is bounded only by available memory, the same posture as Oj (which also ships no nesting limit; the stdlib `json` caps at 100). The `deeply_nested.json` benchmark (212 MB of nesting) is handled without issue. **`generate` is iterative too**, so serializing a deeply nested Ruby structure can't overflow the stack either — reading *and* writing are both depth-safe.
 
 The trade-off: there is currently **no fixed nesting or input-size limit**, so extremely large or adversarially-nested untrusted input is bounded by memory (it can exhaust RAM), not by a crash. If you process untrusted input and want a hard cap, that's a planned opt-in guard — for now, size-limit upstream.
 
