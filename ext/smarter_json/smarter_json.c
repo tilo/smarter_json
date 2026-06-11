@@ -1372,7 +1372,9 @@ static void fj_pstack_free(void *p) {
 }
 static size_t fj_pstack_memsize(const void *p) {
   const fj_pstack *ps = (const fj_pstack *)p;
-  return sizeof(fj_pstack) + (size_t)ps->vcapa * (sizeof(VALUE) + sizeof(long)) + (size_t)ps->fcapa * sizeof(fj_frame);
+  return sizeof(fj_pstack) + (size_t)ps->vcapa * sizeof(VALUE)
+         + (ps->pptr ? (size_t)ps->vcapa * sizeof(long) : 0)
+         + (size_t)ps->fcapa * sizeof(fj_frame);
 }
 static const rb_data_type_t fj_pstack_type = {
   "smarter_json/pstack",
@@ -1384,9 +1386,11 @@ static inline void fj_vpush(fj_state *st, fj_pstack *ps, VALUE v) {
   if (ps->vhead >= ps->vcapa) {
     ps->vcapa *= 2;
     REALLOC_N(ps->vptr, VALUE, ps->vcapa);
-    REALLOC_N(ps->pptr, long, ps->vcapa);
+    if (ps->pptr) REALLOC_N(ps->pptr, long, ps->vcapa);
   }
-  ps->pptr[ps->vhead] = st->pos; /* offset just past this value — the duplicate-key warning position */
+  /* pptr is allocated only when on_warning is set; the fast path (no handler) does no
+   * extra store. The offset is just past this value — the duplicate-key warning position. */
+  if (ps->pptr) ps->pptr[ps->vhead] = st->pos;
   ps->vptr[ps->vhead++] = v;
 }
 static inline void fj_fpush(fj_pstack *ps, long mark, int is_obj) {
@@ -1406,7 +1410,7 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
   int        vss = 0; /* warnings: has a value landed in the current container since the last separator? */
 
   ps->vptr = ALLOC_N(VALUE, 64);    ps->vhead = 0; ps->vcapa = 64;
-  ps->pptr = ALLOC_N(long, 64);
+  ps->pptr = (st->on_warning != Qnil) ? ALLOC_N(long, 64) : NULL; /* only the warning path needs per-value positions */
   ps->fptr = ALLOC_N(fj_frame, 16); ps->fhead = 0; ps->fcapa = 16;
 
   if (implicit_root) fj_fpush(ps, 0, 1);
@@ -1445,7 +1449,7 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
       if (b == '}') {
         VALUE hash;
         fj_advance(st, 1);
-        hash = fj_build_object(st, &ps->vptr[mark], &ps->pptr[mark], ps->vhead - mark);
+        hash = fj_build_object(st, &ps->vptr[mark], ps->pptr ? &ps->pptr[mark] : NULL, ps->vhead - mark);
         ps->vhead = mark;
         ps->fhead--;
         if (ps->fhead == 0) { result = hash; break; }
@@ -1455,7 +1459,7 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
       }
       if (b == -1) {
         if (implicit_root && ps->fhead == 1) {
-          result = fj_build_object(st, &ps->vptr[mark], &ps->pptr[mark], ps->vhead - mark);
+          result = fj_build_object(st, &ps->vptr[mark], ps->pptr ? &ps->pptr[mark] : NULL, ps->vhead - mark);
           break;
         }
         fj_error(st, "unterminated object");
