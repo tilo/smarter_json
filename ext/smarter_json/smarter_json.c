@@ -81,9 +81,9 @@ typedef struct {
  * an error) by scanning from the start of the buffer. CR, LF, and CRLF each
  * count as one newline; col is bytes since the last line start (1-based).
  * Keeping this off the hot path is the point — fj_advance never touches it. */
-static void fj_line_col(fj_state *st, long *line, long *col) {
+static void fj_line_col_to(fj_state *st, long stop, long *line, long *col) {
   long l = 1, c = 1, i;
-  long limit = (st->pos < st->len) ? st->pos : st->len;
+  long limit = (stop < st->len) ? stop : st->len;
   for (i = 0; i < limit; i++) {
     unsigned char b = (unsigned char)st->buf[i];
     if (b == 0x0A) { l++; c = 1; }
@@ -92,6 +92,9 @@ static void fj_line_col(fj_state *st, long *line, long *col) {
   }
   *line = l;
   *col = c;
+}
+static void fj_line_col(fj_state *st, long *line, long *col) {
+  fj_line_col_to(st, st->pos, line, col);
 }
 
 /* Report a non-fatal lenient fix to the on_warning callable — a no-op (and builds no
@@ -104,6 +107,25 @@ static void fj_warn(fj_state *st, VALUE type_sym, const char *msg) {
   rb_funcall(st->on_warning, fj_call_id, 1,
              rb_funcall(cWarning, fj_new_id, 4, type_sym,
                         rb_utf8_str_new_cstr(msg), LONG2NUM(line), LONG2NUM(col)));
+}
+
+/* Like fj_warn but the message is a prebuilt Ruby String (rb_enc_sprintf, for messages
+ * that interpolate the offending key). Same Qnil guard and st->pos line/col. */
+static void fj_warn_str(fj_state *st, VALUE type_sym, VALUE msg) {
+  long line, col;
+  if (st->on_warning == Qnil) return;
+  fj_line_col(st, &line, &col);
+  rb_funcall(st->on_warning, fj_call_id, 1,
+             rb_funcall(cWarning, fj_new_id, 4, type_sym, msg, LONG2NUM(line), LONG2NUM(col)));
+}
+
+/* Like fj_warn_str but at an explicit (line,col) — for a warning detected away from the
+ * cursor. Duplicate keys are found while building the closed object, but attributed to
+ * the object's closing position so the column matches the pure-Ruby parser. */
+static void fj_warn_str_at(fj_state *st, VALUE type_sym, VALUE msg, long line, long col) {
+  if (st->on_warning == Qnil) return;
+  rb_funcall(st->on_warning, fj_call_id, 1,
+             rb_funcall(cWarning, fj_new_id, 4, type_sym, msg, LONG2NUM(line), LONG2NUM(col)));
 }
 
 /* 1-based column of the current byte position (bytes since the last line start).
@@ -1290,7 +1312,7 @@ void rb_hash_bulk_insert(long, const VALUE *, VALUE);
 /* Build a Hash from `count` interleaved key,value slots. Fast path (String keys,
  * default :last_wins): pre-size + bulk insert. symbolize_keys / :first_wins use a
  * per-member loop into the same pre-sized hash. */
-static VALUE fj_build_object(fj_state *st, const VALUE *pairs, long count) {
+static VALUE fj_build_object(fj_state *st, const VALUE *pairs, const long *positions, long count) {
   long  entries = count / 2, i;
   VALUE hash    = rb_hash_new_capa(entries);
 
@@ -1305,7 +1327,16 @@ static VALUE fj_build_object(fj_state *st, const VALUE *pairs, long count) {
     VALUE k = st->symbolize_keys ? rb_funcall(pairs[i], fj_to_sym_id, 0) : pairs[i];
     if (st->dup_first_wins || st->on_warning != Qnil) {
       if (RTEST(rb_funcall(hash, fj_key_p_id, 1, k))) {
-        fj_warn(st, fj_sym_duplicate_key, "duplicate key");
+        if (st->on_warning != Qnil) {
+          long wl, wc;
+          fj_line_col_to(st, positions[i + 1], &wl, &wc); /* the duplicate member's value position — matches the Ruby parser */
+          fj_warn_str_at(st, fj_sym_duplicate_key,
+                         rb_enc_sprintf(rb_utf8_encoding(),
+                                        "duplicate key %"PRIsVALUE" \xe2\x80\x94 %s",
+                                        rb_inspect(k),
+                                        st->dup_first_wins ? "first_wins" : "last_wins"),
+                         wl, wc);
+        }
         if (st->dup_first_wins) continue;
       }
     }
@@ -1323,6 +1354,7 @@ typedef struct { long mark; int is_obj; } fj_frame;
 
 typedef struct {
   VALUE    *vptr;  long vhead;  long vcapa;  /* pending values (GC-marked) */
+  long     *pptr;                            /* byte offset just past each pushed value (mirrors vptr/vcapa); used only to attribute a duplicate-key warning to the duplicate member's position */
   fj_frame *fptr;  long fhead;  long fcapa;  /* open-container frames (no VALUEs) */
 } fj_pstack;
 
@@ -1334,12 +1366,13 @@ static void fj_pstack_mark(void *p) {
 static void fj_pstack_free(void *p) {
   fj_pstack *ps = (fj_pstack *)p;
   if (ps->vptr != NULL) xfree(ps->vptr);
+  if (ps->pptr != NULL) xfree(ps->pptr);
   if (ps->fptr != NULL) xfree(ps->fptr);
   xfree(ps);
 }
 static size_t fj_pstack_memsize(const void *p) {
   const fj_pstack *ps = (const fj_pstack *)p;
-  return sizeof(fj_pstack) + (size_t)ps->vcapa * sizeof(VALUE) + (size_t)ps->fcapa * sizeof(fj_frame);
+  return sizeof(fj_pstack) + (size_t)ps->vcapa * (sizeof(VALUE) + sizeof(long)) + (size_t)ps->fcapa * sizeof(fj_frame);
 }
 static const rb_data_type_t fj_pstack_type = {
   "smarter_json/pstack",
@@ -1347,8 +1380,13 @@ static const rb_data_type_t fj_pstack_type = {
   0, 0, RUBY_TYPED_FREE_IMMEDIATELY,
 };
 
-static inline void fj_vpush(fj_pstack *ps, VALUE v) {
-  if (ps->vhead >= ps->vcapa) { ps->vcapa *= 2; REALLOC_N(ps->vptr, VALUE, ps->vcapa); }
+static inline void fj_vpush(fj_state *st, fj_pstack *ps, VALUE v) {
+  if (ps->vhead >= ps->vcapa) {
+    ps->vcapa *= 2;
+    REALLOC_N(ps->vptr, VALUE, ps->vcapa);
+    REALLOC_N(ps->pptr, long, ps->vcapa);
+  }
+  ps->pptr[ps->vhead] = st->pos; /* offset just past this value — the duplicate-key warning position */
   ps->vptr[ps->vhead++] = v;
 }
 static inline void fj_fpush(fj_pstack *ps, long mark, int is_obj) {
@@ -1368,6 +1406,7 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
   int        vss = 0; /* warnings: has a value landed in the current container since the last separator? */
 
   ps->vptr = ALLOC_N(VALUE, 64);    ps->vhead = 0; ps->vcapa = 64;
+  ps->pptr = ALLOC_N(long, 64);
   ps->fptr = ALLOC_N(fj_frame, 16); ps->fhead = 0; ps->fcapa = 16;
 
   if (implicit_root) fj_fpush(ps, 0, 1);
@@ -1398,7 +1437,7 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
       b = fj_byte(st);
       if (FJ_UNLIKELY(fj_needs_ws_skip(b))) { fj_skip_ws_comments(st); b = fj_byte(st); }
       if (b == ',') { /* collapsing separator: skip empty member */
-        if (st->on_warning != Qnil && !vss) fj_warn(st, fj_sym_empty_slot, "extra comma, collapsed an empty slot");
+        if (st->on_warning != Qnil && !vss) fj_warn(st, fj_sym_empty_slot, "extra comma \xe2\x80\x94 collapsed an empty slot");
         vss = 0;
         fj_advance(st, 1);
         continue;
@@ -1406,17 +1445,17 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
       if (b == '}') {
         VALUE hash;
         fj_advance(st, 1);
-        hash = fj_build_object(st, &ps->vptr[mark], ps->vhead - mark);
+        hash = fj_build_object(st, &ps->vptr[mark], &ps->pptr[mark], ps->vhead - mark);
         ps->vhead = mark;
         ps->fhead--;
         if (ps->fhead == 0) { result = hash; break; }
-        fj_vpush(ps, hash);
+        fj_vpush(st, ps, hash);
         vss = 1;
         continue;
       }
       if (b == -1) {
         if (implicit_root && ps->fhead == 1) {
-          result = fj_build_object(st, &ps->vptr[mark], ps->vhead - mark);
+          result = fj_build_object(st, &ps->vptr[mark], &ps->pptr[mark], ps->vhead - mark);
           break;
         }
         fj_error(st, "unterminated object");
@@ -1430,28 +1469,32 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
       b = fj_byte(st);
       if (FJ_UNLIKELY(fj_needs_ws_skip(b))) { fj_skip_ws_comments(st); b = fj_byte(st); }
       if (b == '{' || b == '[') {
-        fj_vpush(ps, key);
+        fj_vpush(st, ps, key);
         fj_advance(st, 1);
         fj_fpush(ps, ps->vhead, (b == '{'));
         vss = 0;
         continue;
       }
       if (b == '}' || b == ',') { /* key with a colon but no value -> null */
-        fj_vpush(ps, key);
-        fj_vpush(ps, Qnil);
-        fj_warn(st, fj_sym_empty_value, "empty value, used null");
+        fj_vpush(st, ps, key);
+        fj_vpush(st, ps, Qnil);
+        if (st->on_warning != Qnil)
+          fj_warn_str(st, fj_sym_empty_value,
+                      rb_enc_sprintf(rb_utf8_encoding(),
+                                     "key %"PRIsVALUE" had no value \xe2\x80\x94 used null",
+                                     rb_inspect(key)));
         vss = 1;
         continue;
       }
       if (b == -1) fj_error(st, "unexpected end of input");
-      fj_vpush(ps, key);
-      fj_vpush(ps, fj_parse_member_value(st));
+      fj_vpush(st, ps, key);
+      fj_vpush(st, ps, fj_parse_member_value(st));
       vss = 1;
     } else { /* array */
       b = fj_byte(st);
       if (FJ_UNLIKELY(fj_needs_ws_skip(b))) { fj_skip_ws_comments(st); b = fj_byte(st); }
       if (b == ',') { /* collapsing separator: skip empty slot */
-        if (st->on_warning != Qnil && !vss) fj_warn(st, fj_sym_empty_slot, "extra comma, collapsed an empty slot");
+        if (st->on_warning != Qnil && !vss) fj_warn(st, fj_sym_empty_slot, "extra comma \xe2\x80\x94 collapsed an empty slot");
         vss = 0;
         fj_advance(st, 1);
         continue;
@@ -1463,7 +1506,7 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
         ps->vhead = mark;
         ps->fhead--;
         if (ps->fhead == 0) { result = ary; break; }
-        fj_vpush(ps, ary);
+        fj_vpush(st, ps, ary);
         vss = 1;
         continue;
       }
@@ -1481,10 +1524,10 @@ static VALUE fj_parse_iter(fj_state *st, int implicit_root) {
          smart-quote, literals) falls through to the full dispatch below. */
       if (b == '-' || b == '+' || b == '.' || (b >= '0' && b <= '9')) {
         VALUE num;
-        if (fj_try_member_number(st, &num)) { fj_vpush(ps, num); vss = 1; continue; }
+        if (fj_try_member_number(st, &num)) { fj_vpush(st, ps, num); vss = 1; continue; }
       }
-      if (b == '"') { fj_vpush(ps, fj_parse_string(st, '"')); vss = 1; continue; }
-      fj_vpush(ps, fj_parse_member_value(st));
+      if (b == '"') { fj_vpush(st, ps, fj_parse_string(st, '"')); vss = 1; continue; }
+      fj_vpush(st, ps, fj_parse_member_value(st));
       vss = 1;
     }
   }

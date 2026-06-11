@@ -12,6 +12,10 @@
 > ⚠️ We discourage the use of `process(input).first` / `process(input)[0]` because it silently drops potential additional documents
 >    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads.
 
+## 1.1.1 (2026-06-11)
+
+- The C extension now emits the same `on_warning` warnings as the pure-Ruby parser. `empty_value` and `duplicate_key` warnings name the offending key (and `duplicate_key` names the resolution strategy), and the warning text, line, and column are now identical whether or not the C extension is loaded.
+
 ## 1.1.0 (2026-06-09)
 
 RSpec tests: 1,038 → 1,070
