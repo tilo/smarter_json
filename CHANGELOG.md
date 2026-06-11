@@ -3,8 +3,8 @@
 
 > ⚠️ SmarterJSON **always returns an `Array`** of documents.
 > 
-> `SmarterJSON.process` / `SmarterJSON.process_file` return:
->
+> `SmarterJSON.process` / `SmarterJSON.process_file`
+> both return:
 >   — `[]` for no doc
 >   - `[doc]` for one doc
 >   - `[d1, d2, …]` for several docs (NDJSON / JSONL / concatenated docs)
@@ -13,6 +13,8 @@
 >    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads.
 
 ## 1.1.1 (2026-06-11)
+
+RSpec tests: 1,070 → 1,097
 
 - The C extension now emits the same `on_warning` warnings as the pure-Ruby parser. `empty_value` and `duplicate_key` warnings name the offending key (and `duplicate_key` names the resolution strategy), and the warning text, line, and column are now identical whether or not the C extension is loaded.
 

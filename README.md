@@ -19,6 +19,8 @@ A lenient, fast JSON processor for Ruby. It extracts strict JSON, NDJSON, JSONL,
 
 ## Why SmarterJSON?
 
+> 📖 **The thinking behind it:** [*Strict by Accident: Your JSON parser isn't broken, it's answering the wrong question*](https://dev.to/tilo_sloboda/strict-by-accident-your-json-parser-isnt-broken-its-answering-the-wrong-question-54f0) — why a data pipeline wants a lenient, recovery-first parser rather than a spec-policing one.
+
 **Are you tired of seeing errors like these?**
 
 ```
