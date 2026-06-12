@@ -359,6 +359,8 @@ Both the C extension and the pure-Ruby engine are **iterative, not recursive** �
 The trade-off: there is currently **no fixed nesting or input-size limit**, so extremely large or adversarially-nested untrusted input is bounded by memory (it can exhaust RAM), not by a crash. If you process untrusted input and want a hard cap, that's a planned opt-in guard — for now, size-limit upstream.
 
 
+# [A Special Thanks to all Contributors!](CONTRIBUTORS.md) 🎉🎉🎉
+
 ## Development
 
 After checking out the repo, run `bin/setup` to install dependencies, then `rake compile` to build the C extension and `rake spec` to run the tests. The test suite runs every example against **both** the C and pure-Ruby paths, so the two stay behavior-identical.

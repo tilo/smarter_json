@@ -12,6 +12,12 @@
 > ⚠️ We discourage the use of `process(input).first` / `process(input)[0]` because it silently drops potential additional documents
 >    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads.
 
+## 1.1.2 (2026-06-12)
+
+RSpec tests: 1,097
+
+- The C extension now correctly supports Ruby's GC heap compaction (`GC.compact` / auto-compaction) — its cached exception/warning classes are declared to the GC. Thanks [Jean Boussier](https://github.com/byroot) for PR [#7](https://github.com/tilo/smarter_json/pull/7).
+
 ## 1.1.1 (2026-06-11)
 
 RSpec tests: 1,070 → 1,097
