@@ -17,6 +17,8 @@
 
 RSpec tests: 1,097
 
+### Bug Fix
+
 - The C extension now correctly supports Ruby's GC heap compaction (`GC.compact` / auto-compaction) — its cached exception/warning classes are declared to the GC. Thanks [Jean Boussier](https://github.com/byroot) for PR [#7](https://github.com/tilo/smarter_json/pull/7).
 
 ## 1.1.1 (2026-06-11)
