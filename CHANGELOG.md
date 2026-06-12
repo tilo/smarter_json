@@ -14,6 +14,7 @@
 
 ## 1.2.0 (unreleased)
 
+- A leading-zero token now reads as a number when it carries a sign, a decimal point, or an exponent (`+007` → `7`, `-000023.5` → `-23.5`, `00.0` → `0.0`, `007e2` → `700.0`). A bare leading-zero integer (`000001`, `02`) still reads as a string, so IDs, zip codes, and account numbers keep their zeros.
 - `Null` and `NULL` are now read as `nil` (joining `null` / `None` / `undefined`), for SQL / R / PHP / YAML / DB-derived input — in every position the existing spellings work. Quoted (`"NULL"`) or embedded (`NULL Island`) forms stay strings.
 
 ## 1.1.2 (2026-06-12)

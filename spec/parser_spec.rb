@@ -646,7 +646,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           end
         end
 
-        describe "leading-zero numbers fall through to quoteless strings" do
+        describe "bare leading-zero integers fall through to quoteless strings" do
           it 'parses 0080 as the string "0080"' do
             expect(SmarterJSON.process("port: 0080", acceleration: acceleration)).to eq([{ "port" => "0080" }])
             expect(SmarterJSON.process_one("port: 0080", acceleration: acceleration)).to eq({ "port" => "0080" })
@@ -660,6 +660,39 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           it 'parses 02 as the string "02"' do
             expect(SmarterJSON.process("n: 02", acceleration: acceleration)).to eq([{ "n" => "02" }])
             expect(SmarterJSON.process_one("n: 02", acceleration: acceleration)).to eq({ "n" => "02" })
+          end
+        end
+
+        describe "leading-zero numbers with sign / dot / exponent parse as numbers" do
+          # A leading-zero token carries numeric intent — and parses as a NUMBER — when it
+          # has a sign, a decimal point, or an exponent. A BARE leading-zero integer stays a
+          # string (block above) so zip / account / check numbers keep their zeros; IDs never
+          # carry a sign, dot, or exponent.
+
+          it "parses a signed leading-zero integer as a number" do
+            expect(SmarterJSON.process_one("{a: +007, b: -007}", acceleration: acceleration)).to eq({ "a" => 7, "b" => -7 })
+          end
+
+          it "parses a leading-zero decimal as a number" do
+            expect(SmarterJSON.process_one("{a: 00.00, b: -000023.5, c: 00001.5}", acceleration: acceleration)).to eq({ "a" => 0.0, "b" => -23.5, "c" => 1.5 })
+          end
+
+          it "parses leading-zero scientific notation as a number" do
+            expect(SmarterJSON.process_one("{a: 00e5, b: 007e2, c: +00e5}", acceleration: acceleration)).to eq({ "a" => 0.0, "b" => 700.0, "c" => 0.0 })
+          end
+
+          it "applies in arrays and at the top level too" do
+            expect(SmarterJSON.process_one("[000001, -000023.5, 007e2]", acceleration: acceleration)).to eq(["000001", -23.5, 700.0])
+            expect(SmarterJSON.process_one("-000023.5", acceleration: acceleration)).to eq(-23.5)
+            expect(SmarterJSON.process_one("+007", acceleration: acceleration)).to eq(7)
+          end
+
+          it "a bare leading-zero integer still has no top-level form (raises)" do
+            expect { SmarterJSON.process_one("000001", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          end
+
+          it "leaves single-zero and non-leading-zero numbers unchanged" do
+            expect(SmarterJSON.process_one("{a: 0, b: 0.5, c: -0, d: 1.5e3}", acceleration: acceleration)).to eq({ "a" => 0, "b" => 0.5, "c" => 0, "d" => 1500.0 })
           end
         end
 
@@ -1897,9 +1930,9 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect(result["true1"]).to eq(true)
           expect(result["false1"]).to eq(false)
           expect(result["null1"]).to be_nil
-          expect(result["str1"]).to eq("00")                        # leading zero → string
-          expect(result["str2"]).to eq("00.0")
-          expect(result["str3"]).to eq("02")
+          expect(result["str1"]).to eq("00")                        # bare leading zero -> string (same case as an account number)
+          expect(result["str2"]).to eq(0.0)                         # leading zero + dot -> number
+          expect(result["str3"]).to eq("02")                        # bare leading zero -> string (same case as an account number)
         end
 
         it "parses strings_test.hjson and recognizes string-vs-literal distinction" do
