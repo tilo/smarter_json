@@ -12,6 +12,10 @@
 > ⚠️ We discourage the use of `process(input).first` / `process(input)[0]` because it silently drops potential additional documents
 >    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads, because it emits on_warning if it finds multiple docs.
 
+## 1.2.0 (unreleased)
+
+- `Null` and `NULL` are now read as `nil` (joining `null` / `None` / `undefined`), for SQL / R / PHP / YAML / DB-derived input — in every position the existing spellings work. Quoted (`"NULL"`) or embedded (`NULL Island`) forms stay strings.
+
 ## 1.1.2 (2026-06-12)
 
 RSpec tests: 1,097

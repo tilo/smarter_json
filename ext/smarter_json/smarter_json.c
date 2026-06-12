@@ -979,7 +979,8 @@ static VALUE fj_classify_quoteless(fj_state *st, const char *p0, long n0) {
 
   if (fj_tok_eq(p, n, "true")  || fj_tok_eq(p, n, "True"))  return Qtrue;
   if (fj_tok_eq(p, n, "false") || fj_tok_eq(p, n, "False")) return Qfalse;
-  if (fj_tok_eq(p, n, "null")  || fj_tok_eq(p, n, "None") || fj_tok_eq(p, n, "undefined")) return Qnil;
+  if (fj_tok_eq(p, n, "null")  || fj_tok_eq(p, n, "Null") || fj_tok_eq(p, n, "NULL") ||
+      fj_tok_eq(p, n, "None") || fj_tok_eq(p, n, "undefined")) return Qnil;
   if (fj_tok_eq(p, n, "NaN")) return rb_float_new(NAN);
   if (fj_tok_eq(p, n, "Infinity")) return rb_float_new(INFINITY);
 
@@ -1273,8 +1274,10 @@ static VALUE fj_parse_value(fj_state *st) {
     case 'T':  return fj_parse_literal(st, "True", Qtrue);
     case 'F':  return fj_parse_literal(st, "False", Qfalse);
     case 'u':  return fj_parse_literal(st, "undefined", Qnil);
-    case 'N':  /* NaN (number) vs None (Python null) */
+    case 'N':  /* NaN (number); None / Null / NULL (null) */
       if (fj_byte_at(st, 1) == 'a') return fj_parse_number(st);
+      if (fj_byte_at(st, 1) == 'u') return fj_parse_literal(st, "Null", Qnil);
+      if (fj_byte_at(st, 1) == 'U') return fj_parse_literal(st, "NULL", Qnil);
       return fj_parse_literal(st, "None", Qnil);
     default:
       if (b == '-' || b == '+' || b == '.' || b == 'I' || (b >= '0' && b <= '9')) {

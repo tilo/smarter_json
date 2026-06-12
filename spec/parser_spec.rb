@@ -299,6 +299,71 @@ RSpec.describe SmarterJSON do
             expect(SmarterJSON.process("NaN", acceleration: acceleration).first).to be_a(Float).and(be_nan)
             expect(SmarterJSON.process_one("NaN", acceleration: acceleration)).to be_a(Float).and(be_nan)
           end
+
+          it "parses +Infinity at the top level" do
+            expect(SmarterJSON.process("+Infinity", acceleration: acceleration)).to eq([Float::INFINITY])
+            expect(SmarterJSON.process_one("+Infinity", acceleration: acceleration)).to eq(Float::INFINITY)
+          end
+
+          it "parses NaN and Infinity as array elements" do
+            result = SmarterJSON.process_one("[1, NaN, Infinity, -Infinity]", acceleration: acceleration)
+            expect(result[0]).to eq(1)
+            expect(result[1]).to be_a(Float).and(be_nan)
+            expect(result[2]).to eq(Float::INFINITY)
+            expect(result[3]).to eq(-Float::INFINITY)
+          end
+
+          it "returns real Float objects (Float::INFINITY / Float::NAN), usable as numbers" do
+            inf = SmarterJSON.process_one("Infinity", acceleration: acceleration)
+            nan = SmarterJSON.process_one("NaN", acceleration: acceleration)
+            expect(inf).to be_a(Float)
+            expect(inf.infinite?).to eq(1) # +Infinity (Float#infinite? => 1)
+            expect(inf + 1).to eq(Float::INFINITY) # arithmetic works
+            expect(nan).to be_a(Float)
+            expect(nan).to be_nan      # <-- the real check: did SmarterJSON return a true NaN?
+            expect(nan).not_to eq(nan) # <-- just re-demonstrates IEEE behavior (NaN != itself), not OUR behavior
+          end
+
+          it "classifies recognized literals to their values alongside NaN/Infinity (recognized-literals-win)" do
+            result = SmarterJSON.process_one(<<~JSON, acceleration: acceleration)
+              {
+                happy: True,
+                sad: False,
+                nothing: None,
+                missing: undefined,
+                score: Infinity,
+                debt: -Infinity,
+                ratio: NaN
+              }
+            JSON
+            expect(result["happy"]).to be(true)
+            expect(result["sad"]).to be(false)
+            expect(result["nothing"]).to be_nil
+            expect(result["missing"]).to be_nil
+            expect(result["score"]).to eq(Float::INFINITY)
+            expect(result["debt"]).to eq(-Float::INFINITY)
+            expect(result["ratio"]).to be_a(Float).and(be_nan)
+          end
+        end
+
+        describe "recognized-literal classification boundaries" do
+          # The literal classification (true/True, false/False, null/None/undefined,
+          # NaN, Infinity) applies ONLY to unquoted tokens, and matches exactly.
+
+          it "keeps a QUOTED recognized literal as a string (classification is quoteless-only)" do
+            expect(SmarterJSON.process_one('{"a": "True"}', acceleration: acceleration)).to eq({ "a" => "True" })
+            expect(SmarterJSON.process_one('{"a": "NaN"}', acceleration: acceleration)).to eq({ "a" => "NaN" })
+            expect(SmarterJSON.process_one('{"a": "Infinity"}', acceleration: acceleration)).to eq({ "a" => "Infinity" })
+            expect(SmarterJSON.process_one('{"a": "None"}', acceleration: acceleration)).to eq({ "a" => "None" })
+            expect(SmarterJSON.process_one('{"a": "null"}', acceleration: acceleration)).to eq({ "a" => "null" })
+          end
+
+          it "does not recognize wrong-case variants (exact match) — they stay quoteless strings" do
+            expect(SmarterJSON.process_one("{a: TRUE}", acceleration: acceleration)).to eq({ "a" => "TRUE" })
+            expect(SmarterJSON.process_one("{a: nan}", acceleration: acceleration)).to eq({ "a" => "nan" })
+            expect(SmarterJSON.process_one("{a: infinity}", acceleration: acceleration)).to eq({ "a" => "infinity" })
+            expect(SmarterJSON.process_one("{a: NONE}", acceleration: acceleration)).to eq({ "a" => "NONE" })
+          end
         end
 
         describe "explicit + sign on numbers" do
@@ -872,6 +937,46 @@ second"', acceleration: acceleration)).to eq("firstsecond")
               input = "{\"msg\": \u201cHe said \"hi\" loudly\u201d}"
               expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "msg" => "He said \"hi\" loudly" })
             end
+          end
+        end
+
+        describe "Null / NULL (SQL / R / PHP / YAML null)" do
+          # Null and NULL join null / None / undefined as recognized spellings of nil
+          # (SQL / R / PHP var_export / YAML / DB-derived input). TRUE/FALSE are intentionally
+          # NOT added — uppercase booleans have far thinner precedent (see CHANGELOG/discussion).
+
+          it "parses Null as nil (top level)" do
+            expect(SmarterJSON.process("Null", acceleration: acceleration)).to eq([nil])
+            expect(SmarterJSON.process_one("Null", acceleration: acceleration)).to be_nil
+          end
+
+          it "parses NULL as nil (top level)" do
+            expect(SmarterJSON.process("NULL", acceleration: acceleration)).to eq([nil])
+            expect(SmarterJSON.process_one("NULL", acceleration: acceleration)).to be_nil
+          end
+
+          it "recognizes Null / NULL as object value and array element" do
+            expect(SmarterJSON.process_one("{a: Null, b: NULL}", acceleration: acceleration)).to eq({ "a" => nil, "b" => nil })
+            expect(SmarterJSON.process_one("[Null, NULL]", acceleration: acceleration)).to eq([nil, nil])
+          end
+
+          it "recognizes Null / NULL surrounded by whitespace" do
+            expect(SmarterJSON.process_one("{ a:   Null   , b:  NULL  }", acceleration: acceleration)).to eq({ "a" => nil, "b" => nil })
+          end
+
+          it "keeps a QUOTED Null / NULL as a string (classification is quoteless-only)" do
+            expect(SmarterJSON.process_one('{"a": "Null"}', acceleration: acceleration)).to eq({ "a" => "Null" })
+            expect(SmarterJSON.process_one('{"a": "NULL"}', acceleration: acceleration)).to eq({ "a" => "NULL" })
+          end
+
+          it "does NOT recognize Null / NULL embedded in a larger token (stays a string)" do
+            expect(SmarterJSON.process_one("{a: NULL Island}", acceleration: acceleration)).to eq({ "a" => "NULL Island" })
+            expect(SmarterJSON.process_one("{a: Null and void}", acceleration: acceleration)).to eq({ "a" => "Null and void" })
+            expect(SmarterJSON.process_one("{a: Nullable}", acceleration: acceleration)).to eq({ "a" => "Nullable" })
+          end
+
+          it "leaves None / null / undefined unchanged (still nil)" do
+            expect(SmarterJSON.process_one("{a: None, b: null, c: undefined}", acceleration: acceleration)).to eq({ "a" => nil, "b" => nil, "c" => nil })
           end
         end
 

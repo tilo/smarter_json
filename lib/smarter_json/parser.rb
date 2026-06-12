@@ -1210,10 +1210,11 @@ module SmarterJSON
 
     # Disambiguate NaN (number) from None (Python null) at a strict position.
     def parse_upper_n
-      if byte_at(1) == 0x61 # 'a' → NaN
-        parse_number
-      else
-        parse_literal_keyword("None", nil)
+      case byte_at(1)
+      when 0x61 then parse_number                       # 'a' -> NaN
+      when 0x75 then parse_literal_keyword("Null", nil) # 'u' -> Null
+      when 0x55 then parse_literal_keyword("NULL", nil) # 'U' -> NULL
+      else parse_literal_keyword("None", nil)
       end
     end
 
@@ -1378,7 +1379,7 @@ module SmarterJSON
       case str
       when "true", "True"          then return true
       when "false", "False"        then return false
-      when "null", "None"          then return nil
+      when "null", "Null", "NULL", "None" then return nil
       when "undefined"             then return nil
       when "NaN"                   then return Float::NAN
       when "Infinity", "+Infinity" then return Float::INFINITY
