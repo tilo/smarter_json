@@ -1676,9 +1676,16 @@ static VALUE fj_parse_c(VALUE self, VALUE input, VALUE opts) {
 
 void Init_smarter_json(void) {
   mSmarterJSON = rb_define_module("SmarterJSON");
+
+  rb_global_variable(&cParseError);
   cParseError = rb_const_get(mSmarterJSON, rb_intern("ParseError"));
+
+  rb_global_variable(&cEncodingError);
   cEncodingError = rb_const_get(mSmarterJSON, rb_intern("EncodingError"));
+
+  rb_global_variable(&cWarning);
   cWarning = rb_const_get(mSmarterJSON, rb_intern("Warning"));
+
   fj_bigdecimal_id = rb_intern("BigDecimal");
   fj_to_sym_id = rb_intern("to_sym");
   fj_key_p_id = rb_intern("key?");
