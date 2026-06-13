@@ -1705,11 +1705,15 @@ module SmarterJSON
           value = @input.byteslice(hex_start, @pos - hex_start).delete("_").to_i(16)
           return negative ? -value : value
         end
-        # A run of further digits after the single leading '0' (007, 00023) — consume them
-        # and flag it; the reject check below turns a bare leading-zero integer into an error.
-        if (b = byte) && b >= ZERO && b <= NINE
-          had_leading_zero = true
-          advance(1) while (b = byte) && ((b >= ZERO && b <= NINE) || b == UNDERSCORE)
+        # A run of further digits after the single leading '0' (007, 00023, or the
+        # underscore-separated 0_0) — consume it and flag the leading zero; the reject check
+        # below turns a bare leading-zero integer into an error. The underscore is only a
+        # separator, so 0_0.5 behaves like 00.5.
+        if (b = byte) && ((b >= ZERO && b <= NINE) || b == UNDERSCORE)
+          while (b = byte) && ((b >= ZERO && b <= NINE) || b == UNDERSCORE)
+            had_leading_zero = true if b >= ZERO && b <= NINE
+            advance(1)
+          end
         end
       elsif byte && byte >= 0x31 && byte <= NINE
         advance(1) while (b = byte) && ((b >= ZERO && b <= NINE) || b == UNDERSCORE)

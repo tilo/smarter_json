@@ -694,6 +694,34 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           it "leaves single-zero and non-leading-zero numbers unchanged" do
             expect(SmarterJSON.process_one("{a: 0, b: 0.5, c: -0, d: 1.5e3}", acceleration: acceleration)).to eq({ "a" => 0, "b" => 0.5, "c" => 0, "d" => 1500.0 })
           end
+
+          it "treats an underscore right after the leading zero like any other leading-zero run" do
+            # 0_0.5 is 00.5 once the underscore is removed -> a number, because of the dot;
+            # 0_0e5 is 00e5 -> a number, because of the exponent. Both paths must agree (the C
+            # scanner once bailed on the 0_<digit> shape and kept the whole token a string).
+            expect(SmarterJSON.process_one("{a: 0_0.5, b: 0_0e5}", acceleration: acceleration)).to eq({ "a" => 0.5, "b" => 0.0 })
+            # a bare 0_0 (no sign / dot / exponent) is still an ID -> string.
+            expect(SmarterJSON.process_one("{a: 0_0, b: 0_07}", acceleration: acceleration)).to eq({ "a" => "0_0", "b" => "0_07" })
+          end
+
+          it "treats 0_<digit> at the top level just like the underscore-free form" do
+            # The underscore is only a digit separator, so 0_0.5 behaves like 00.5 everywhere:
+            # at the top level it is a recognized number (00.5 -> 0.5 there too).
+            expect(SmarterJSON.process_one("0_0.5", acceleration: acceleration)).to eq(0.5)
+            expect(SmarterJSON.process_one("0_0e5", acceleration: acceleration)).to eq(0.0)
+            # ...while a bare 0_0 has no top-level form, same as 00 / 000001 -> it raises.
+            expect { SmarterJSON.process_one("0_0", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          end
+        end
+
+        describe "version-like strings (multiple dots) stay strings" do
+          it "keeps dotted version numbers as strings on both paths" do
+            expect(SmarterJSON.process_one("{a: 1.1.0, b: 0.0.2, c: 2.0.0.1, d: 2.0.2.0.pre1}", acceleration: acceleration)).to eq({ "a" => "1.1.0", "b" => "0.0.2", "c" => "2.0.0.1", "d" => "2.0.2.0.pre1" })
+          end
+
+          it "keeps leading-zero version numbers as strings too" do
+            expect(SmarterJSON.process_one("{a: 00.0.2, b: 007.0.1, c: 0.9.7}", acceleration: acceleration)).to eq({ "a" => "00.0.2", "b" => "007.0.1", "c" => "0.9.7" })
+          end
         end
 
         describe "implicit root object" do

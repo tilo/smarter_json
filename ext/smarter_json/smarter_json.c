@@ -654,10 +654,13 @@ static int fj_try_decimal(fj_state *st, const char *p, long n, VALUE *out) {
    * account / check numbers preserve their zeros. */
   if (i < n && p[i] == '0') {
     has_digit = 1; m10digits = 1; i++;
-    if (i < n && p[i] >= '0' && p[i] <= '9') {
-      had_leading_zero = 1;
+    /* A leading '0' followed by more digits (possibly underscore-separated, like the
+     * [1-9] branch below) is a leading-zero token: consume the run and flag it, so
+     * 0_5.0 / 0_0.5 behave exactly like 05.0 / 00.5 on both paths. */
+    if (i < n && ((p[i] >= '0' && p[i] <= '9') || p[i] == '_')) {
       for (;;) {
         while (i < n && p[i] >= '0' && p[i] <= '9') {
+          had_leading_zero = 1;
           if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(p[i] - '0'); m10digits++; }
           else overflow = 1;
           i++;
@@ -779,10 +782,13 @@ static VALUE fj_parse_number(fj_state *st) {
   if (*p == '0') {
     m10digits = 1;  /* one leading zero, counted as a single mantissa digit */
     p++;
-    if (*p >= '0' && *p <= '9') {
-      had_leading_zero = 1;
+    /* A leading '0' followed by more digits (possibly underscore-separated, like the
+     * [1-9] branch below) is a leading-zero token: consume the run and flag it, so the
+     * underscore is just a separator (0_0.5 behaves like 00.5). */
+    if ((*p >= '0' && *p <= '9') || *p == '_') {
       for (;;) {
         while (*p >= '0' && *p <= '9') {
+          had_leading_zero = 1;
           if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; }
           else overflow = 1;
           p++;
