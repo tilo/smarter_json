@@ -145,7 +145,23 @@ JSON
 
 A `#`/`//` only starts a comment when preceded by whitespace, so `http://example.com` stays a string rather than being truncated.
 
-### Example 10: Wrapper Noise Around a Payload
+### Example 10: Leading-Zero IDs and SQL `NULL`
+
+```ruby
+SmarterJSON.process_one(<<~JSON)
+  {
+    user_id:    007,      # bare leading zero -> kept as a string
+    zip:        02139,    # ditto: zip codes keep their leading zero
+    balance:    -007.50,  # a sign / decimal point / exponent makes it a number
+    deleted_at: NULL      # SQL / R / YAML null spelling -> nil
+  }
+JSON
+# => {"user_id"=>"007", "zip"=>"02139", "balance"=>-7.5, "deleted_at"=>nil}
+```
+
+A bare leading-zero integer is kept as a string so identifiers, zip codes, and account numbers don't lose their zeros; a sign, decimal point, or exponent marks numeric intent (`-007.50` → `-7.5`). `Null` and `NULL` join `null` / `None` / `undefined` as spellings of `nil`; a quoted `"NULL"` stays a string.
+
+### Example 11: Wrapper Noise Around a Payload
 
 #### Fenced payload
 
@@ -197,14 +213,14 @@ TEXT
 # => [{"a"=>1}, {"b"=>2}]
 ```
 
-### Example 11: Write JSON
+### Example 12: Write JSON
 
 ```ruby
 SmarterJSON.generate({ "a" => 1, "b" => [2, 3] })   # => '{"a":1,"b":[2,3]}'
 SmarterJSON.generate([1, 2, 3])                       # => '[1,2,3]'
 ```
 
-### Example 12: Write NDJSON
+### Example 13: Write NDJSON
 
 An Array writes one element per line:
 
@@ -212,7 +228,7 @@ An Array writes one element per line:
 SmarterJSON.generate([{ "id" => 1 }, { "id" => 2 }], format: :ndjson)   # => "{\"id\":1}\n{\"id\":2}\n"
 ```
 
-### Example 13: Round-Trip Read and Write
+### Example 14: Round-Trip Read and Write
 
 ```ruby
 obj = { "a" => 1, "b" => [2, "three", nil, true] }

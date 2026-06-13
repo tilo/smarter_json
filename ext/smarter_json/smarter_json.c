@@ -641,16 +641,33 @@ static FJ_ALWAYS_INLINE VALUE fj_float_from_parts(fj_state *st, uint64_t m10, in
  * per-byte '_' test, dropping to a slow step only when an underscore appears. */
 static int fj_try_decimal(fj_state *st, const char *p, long n, VALUE *out) {
   long i = 0;
-  int  is_float = 0, neg = 0, has_digit = 0, overflow = 0;
+  int  is_float = 0, neg = 0, has_digit = 0, overflow = 0, has_sign = 0, had_leading_zero = 0;
   uint64_t m10 = 0;
   int  m10digits = 0, frac = 0;
   int64_t e10 = 0;
 
-  if (i < n && (p[i] == '-' || p[i] == '+')) { neg = (p[i] == '-'); i++; }
+  if (i < n && (p[i] == '-' || p[i] == '+')) { has_sign = 1; neg = (p[i] == '-'); i++; }
 
-  /* Integer part: a single '0', or [1-9] then digits/underscores. */
+  /* Integer part: a single '0', or [1-9] then digits/underscores. A leading '0' followed
+   * by more digits (a leading-zero token) is consumed too but flagged: a BARE leading-zero
+   * integer (no sign / dot / exponent) is rejected below and kept as a string, so zip /
+   * account / check numbers preserve their zeros. */
   if (i < n && p[i] == '0') {
     has_digit = 1; m10digits = 1; i++;
+    /* Underscore-separated too (like the [1-9] branch below), so 0_5.0 / 0_0.5 behave
+     * exactly like 05.0 / 00.5 on both paths. */
+    if (i < n && ((p[i] >= '0' && p[i] <= '9') || p[i] == '_')) {
+      for (;;) {
+        while (i < n && p[i] >= '0' && p[i] <= '9') {
+          had_leading_zero = 1;
+          if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(p[i] - '0'); m10digits++; }
+          else overflow = 1;
+          i++;
+        }
+        if (i < n && p[i] == '_') { i++; continue; }
+        break;
+      }
+    }
   } else if (i < n && p[i] >= '1' && p[i] <= '9') {
     has_digit = 1;
     for (;;) {
@@ -699,6 +716,8 @@ static int fj_try_decimal(fj_state *st, const char *p, long n, VALUE *out) {
 
   if (i != n)     return 0;  /* token not fully consumed -> not a number (string) */
   if (!has_digit) return 0;  /* e.g. "." or "+" -> not a number (string) */
+  /* A BARE leading-zero integer (no sign / dot / exponent) is an ID, not a number. */
+  if (had_leading_zero && !has_sign && !is_float) return 0;
 
   if (!is_float) {
     *out = fj_int_from_parts(m10, m10digits, neg, overflow, p, n);
@@ -730,13 +749,13 @@ static VALUE fj_parse_number(fj_state *st) {
   const char *p   = buf + st->pos;  /* buf[len] == '\0' (RSTRING_PTR) is the scan sentinel */
   const char *np  = p;              /* token start, includes a leading sign */
   long   nlen;
-  int    is_float = 0, neg = 0, overflow = 0;
+  int    is_float = 0, neg = 0, overflow = 0, has_sign = 0, had_leading_zero = 0;
   uint64_t m10 = 0;                 /* mantissa: integer + fraction digits */
   int    m10digits = 0;             /* mantissa digit chars (caps the Eisel-Lemire fast path at 18) */
   int    frac = 0;                  /* fraction digit chars: e10 -= frac */
   int64_t e10 = 0;
 
-  if (*p == '-' || *p == '+') { neg = (*p == '-'); p++; }
+  if (*p == '-' || *p == '+') { has_sign = 1; neg = (*p == '-'); p++; }
 
   /* Cold branches (rare, not perf-critical): sync the cursor, reuse scalar helpers. */
   if (*p == 'I') { st->pos = p - buf; fj_consume_keyword(st, "Infinity"); return rb_float_new(neg ? -INFINITY : INFINITY); }
@@ -755,10 +774,27 @@ static VALUE fj_parse_number(fj_state *st) {
     return rb_str_to_inum(hx, 16, 0);
   }
 
-  /* Integer part: a single '0', or [1-9] then digits/underscores. */
+  /* Integer part: a single '0', or [1-9] then digits/underscores. A leading '0' followed
+   * by more digits is consumed but flagged; a BARE leading-zero integer (no sign / dot /
+   * exponent) is rejected after the scan — it is an ID, not a number, and has no bare
+   * top-level quoteless-string form, so it raises (matching `000001`). */
   if (*p == '0') {
     m10digits = 1;  /* one leading zero, counted as a single mantissa digit */
     p++;
+    /* Underscore-separated too (like the [1-9] branch below), so the underscore is just a
+     * separator (0_0.5 behaves like 00.5). */
+    if ((*p >= '0' && *p <= '9') || *p == '_') {
+      for (;;) {
+        while (*p >= '0' && *p <= '9') {
+          had_leading_zero = 1;
+          if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; }
+          else overflow = 1;
+          p++;
+        }
+        if (*p == '_') { p++; continue; }
+        break;
+      }
+    }
   } else if (*p >= '1' && *p <= '9') {
     for (;;) {
       while (*p >= '0' && *p <= '9') {
@@ -810,6 +846,12 @@ static VALUE fj_parse_number(fj_state *st) {
 
   st->pos = p - buf;
   nlen = p - np;
+
+  /* A BARE leading-zero integer is an ID, not a number; at this top-level / strict
+   * position there is no quoteless-string form, so it raises. */
+  if (had_leading_zero && !has_sign && !is_float) {
+    fj_error(st, "invalid number with a leading zero");
+  }
 
   if (!is_float) {
     return fj_int_from_parts(m10, m10digits, neg, overflow, np, nlen);
@@ -979,7 +1021,8 @@ static VALUE fj_classify_quoteless(fj_state *st, const char *p0, long n0) {
 
   if (fj_tok_eq(p, n, "true")  || fj_tok_eq(p, n, "True"))  return Qtrue;
   if (fj_tok_eq(p, n, "false") || fj_tok_eq(p, n, "False")) return Qfalse;
-  if (fj_tok_eq(p, n, "null")  || fj_tok_eq(p, n, "None") || fj_tok_eq(p, n, "undefined")) return Qnil;
+  if (fj_tok_eq(p, n, "null")  || fj_tok_eq(p, n, "Null") || fj_tok_eq(p, n, "NULL") ||
+      fj_tok_eq(p, n, "None") || fj_tok_eq(p, n, "undefined")) return Qnil;
   if (fj_tok_eq(p, n, "NaN")) return rb_float_new(NAN);
   if (fj_tok_eq(p, n, "Infinity")) return rb_float_new(INFINITY);
 
@@ -1273,8 +1316,10 @@ static VALUE fj_parse_value(fj_state *st) {
     case 'T':  return fj_parse_literal(st, "True", Qtrue);
     case 'F':  return fj_parse_literal(st, "False", Qfalse);
     case 'u':  return fj_parse_literal(st, "undefined", Qnil);
-    case 'N':  /* NaN (number) vs None (Python null) */
+    case 'N':  /* NaN (number); None / Null / NULL (null) */
       if (fj_byte_at(st, 1) == 'a') return fj_parse_number(st);
+      if (fj_byte_at(st, 1) == 'u') return fj_parse_literal(st, "Null", Qnil);
+      if (fj_byte_at(st, 1) == 'U') return fj_parse_literal(st, "NULL", Qnil);
       return fj_parse_literal(st, "None", Qnil);
     default:
       if (b == '-' || b == '+' || b == '.' || b == 'I' || (b >= '0' && b <= '9')) {

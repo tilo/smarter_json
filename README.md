@@ -8,7 +8,7 @@ A lenient, fast JSON processor for Ruby. It extracts strict JSON, NDJSON, JSONL,
 
 ## Features at a glance
 
-- **Reads the whole human-JSON superset, no modes or flags** — strict JSON, NDJSON, JSONL, JSON5, HJSON, JSONC, plus comments, trailing commas, unquoted / single / triple / smart quotes, an implicit root object, `NaN` / `Infinity` / hex / underscores, Python & JavaScript literals, a UTF-8 BOM, mixed line endings, and any Ruby encoding (see [What it accepts](#what-it-accepts-beyond-strict-json) for the full list).
+- **Reads the whole human-JSON superset, no modes or flags** — strict JSON, NDJSON, JSONL, JSON5, HJSON, JSONC, plus comments, trailing commas, unquoted / single / triple / smart quotes, an implicit root object, `NaN` / `Infinity` / hex / underscores, Python / JavaScript / SQL literals, a UTF-8 BOM, mixed line endings, and any Ruby encoding (see [What it accepts](#what-it-accepts-beyond-strict-json) for the full list).
 - **Every document from multi-document input, in one call** — `process` returns an `Array` of all of them; `process_one` returns the single value and warns if there was more than one (never raises; routed to `on_warning`, else `Rails.logger`, else `Kernel.warn`).
 - **Streaming in bounded memory** — pass a block, or use `foreach(path_or_io)` for a composable `Enumerator` you can `.select` / `.map` / `.lazy` over.
 - **Recovers JSON from LLM / markdown noise** — strips markdown code fences, surrounding prose, and `<json>` tags, and pulls every payload out of one messy blob.
@@ -75,7 +75,8 @@ Three things set it apart:
 - Trailing commas; unquoted keys (`{host: localhost}`); single-quoted, triple-quoted (`'''…'''`), and quoteless string values
 - Implicit root object — a config file that starts with `key: value`, no outer `{}`
 - `NaN`, `Infinity`, hex (`0xFF`), leading `+` / `.`, underscores in numbers (`1_000_000`)
-- UTF-8 BOM, smart/curly quotes (in keys and values), Python literals (`True` / `False` / `None`), JavaScript `undefined`
+- Leading-zero numbers (which strict JSON rejects): a token with a sign, decimal point, or exponent reads as a number (`-007.5` → `-7.5`, `007e2` → `700.0`), but a bare leading-zero integer is kept as a string (`007`, `02`) so IDs, zip codes, and account numbers don't lose their zeros
+- UTF-8 BOM, smart/curly quotes (in keys and values), Python literals (`True` / `False` / `None`), JavaScript `undefined`, case-variant null (`Null` / `NULL`, as SQL / R / PHP / YAML emit it)
 - Mixed CR / LF / CRLF line endings, and any Ruby-supported input encoding (via `encoding:`)
 - Duplicate keys (last value wins by default; configurable)
 

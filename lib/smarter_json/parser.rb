@@ -739,7 +739,7 @@ module SmarterJSON
     # Mantissa must carry at least one digit (int part, or a leading-dot fraction), so a
     # bare exponent like "-e695881" is NOT a number — it falls through to a quoteless
     # string, matching the C path. Trailing exponent stays optional.
-    DEC_RE      = /\A[-+]?(?:(?:0|[1-9][0-9_]*)(?:\.[0-9_]*)?|\.[0-9_]+)(?:[eE][-+]?[0-9_]+)?\z/.freeze
+    DEC_RE      = /\A[-+]?(?:[0-9][0-9_]*(?:\.[0-9_]*)?|\.[0-9_]+)(?:[eE][-+]?[0-9_]+)?\z/.freeze
     # A decimal BigDecimal() would reject as-is: a leading dot (".5") or a dot not
     # followed by a digit ("5.", "5.e3"). Matches iff normalize_for_bigdecimal
     # would change the string — so when it doesn't match, we skip normalization.
@@ -1210,10 +1210,11 @@ module SmarterJSON
 
     # Disambiguate NaN (number) from None (Python null) at a strict position.
     def parse_upper_n
-      if byte_at(1) == 0x61 # 'a' → NaN
-        parse_number
-      else
-        parse_literal_keyword("None", nil)
+      case byte_at(1)
+      when 0x61 then parse_number                       # 'a' -> NaN
+      when 0x75 then parse_literal_keyword("Null", nil) # 'u' -> Null
+      when 0x55 then parse_literal_keyword("NULL", nil) # 'U' -> NULL
+      else parse_literal_keyword("None", nil)
       end
     end
 
@@ -1378,7 +1379,7 @@ module SmarterJSON
       case str
       when "true", "True"          then return true
       when "false", "False"        then return false
-      when "null", "None"          then return nil
+      when "null", "Null", "NULL", "None" then return nil
       when "undefined"             then return nil
       when "NaN"                   then return Float::NAN
       when "Infinity", "+Infinity" then return Float::INFINITY
@@ -1405,7 +1406,15 @@ module SmarterJSON
       # number tokens that is a real per-value allocation. Underscores are rare, so only
       # pay it when the token actually contains one (measured +27% on long-token decimals).
       body = str.include?("_") ? str.delete("_") : str
-      body.match?(/[.eE]/) ? decimal_value(body) : body.to_i
+      return decimal_value(body) if body.match?(/[.eE]/)
+
+      # A BARE leading-zero integer (no sign / dot / exponent) is an ID — a zip code,
+      # account number, phone number — not a number; keep it a string so the zeros survive.
+      # A sign (+007 / -007) signals numeric intent (IDs never carry a sign), so those parse.
+      c0 = body.getbyte(0)
+      return NOT_NUMERIC if c0 == ZERO && body.bytesize > 1
+
+      body.to_i
     end
 
     # True when the token starts with [+-]?0[xX] — the only shape HEX_RE can match.
@@ -1663,10 +1672,13 @@ module SmarterJSON
 
     def parse_number
       negative = false
+      signed = false
       if byte == MINUS
         negative = true
+        signed = true
         advance(1)
       elsif byte == PLUS
+        signed = true
         advance(1)
       end
 
@@ -1680,6 +1692,7 @@ module SmarterJSON
       end
 
       int_start = @pos
+      had_leading_zero = false
 
       if byte == ZERO
         advance(1)
@@ -1691,6 +1704,16 @@ module SmarterJSON
 
           value = @input.byteslice(hex_start, @pos - hex_start).delete("_").to_i(16)
           return negative ? -value : value
+        end
+        # A run of further digits after the single leading '0' (007, 00023, or the
+        # underscore-separated 0_0) — consume it and flag the leading zero; the reject check
+        # below turns a bare leading-zero integer into an error. The underscore is only a
+        # separator, so 0_0.5 behaves like 00.5.
+        if (b = byte) && ((b >= ZERO && b <= NINE) || b == UNDERSCORE)
+          while (b = byte) && ((b >= ZERO && b <= NINE) || b == UNDERSCORE)
+            had_leading_zero = true if b >= ZERO && b <= NINE
+            advance(1)
+          end
         end
       elsif byte && byte >= 0x31 && byte <= NINE
         advance(1) while (b = byte) && ((b >= ZERO && b <= NINE) || b == UNDERSCORE)
@@ -1715,6 +1738,13 @@ module SmarterJSON
         raise error("invalid number: expected digits in exponent") unless byte && byte >= ZERO && byte <= NINE
 
         advance(1) while (b = byte) && ((b >= ZERO && b <= NINE) || b == UNDERSCORE)
+      end
+
+      # A BARE leading-zero integer is an ID, not a number; at this top-level / strict
+      # position there is no quoteless-string form, so it raises (a sign or a dot/exponent
+      # signals numeric intent and is allowed: +007 -> 7, -000023.5 -> -23.5, 007e2 -> 700.0).
+      if had_leading_zero && !signed && !is_float
+        raise error("invalid number with a leading zero")
       end
 
       slice = @input.byteslice(int_start, @pos - int_start).delete("_")
