@@ -76,7 +76,7 @@ Three things set it apart:
 - Implicit root object — a config file that starts with `key: value`, no outer `{}`
 - `NaN`, `Infinity`, hex (`0xFF`), leading `+` / `.`, underscores in numbers (`1_000_000`)
 - Leading-zero numbers (which strict JSON rejects): a token with a sign, decimal point, or exponent reads as a number (`-007.5` → `-7.5`, `007e2` → `700.0`), but a bare leading-zero integer is kept as a string (`007`, `02`) so IDs, zip codes, and account numbers don't lose their zeros
-- UTF-8 BOM, smart/curly quotes (in keys and values), Python literals (`True` / `False` / `None`), JavaScript `undefined`, case-variant null (`Null` / `NULL`, as SQL / R / YAML emit it)
+- UTF-8 BOM, smart/curly quotes (in keys and values), Python literals (`True` / `False` / `None`), JavaScript `undefined`, case-variant null (`Null` / `NULL`, as SQL / R / PHP / YAML emit it)
 - Mixed CR / LF / CRLF line endings, and any Ruby-supported input encoding (via `encoding:`)
 - Duplicate keys (last value wins by default; configurable)
 
