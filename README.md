@@ -91,13 +91,15 @@ The lenient grammar is a superset of these human-JSON specs — listed once, her
 * [HJSON](https://hjson.github.io/) <sup>†</sup>
 * [JWCC / HuJSON](https://github.com/tailscale/hujson)
 * [Nigel Tao](https://nigeltao.github.io/blog/2021/json-with-commas-comments.html)
-* [JSONH](https://github.com/jsonh-org/Jsonh) <sup>†</sup>
+* [JSONH](https://github.com/jsonh-org/Jsonh) <sup>‡</sup>
 * [JSONC (VS Code)](https://jsonc.org/)
 * [NDJSON / JSON Text Sequences (RFC 7464)](https://datatracker.ietf.org/doc/html/rfc7464).
 
-<sup>†</sup> HJSON and JSONH are deliberate subsets. SmarterJSON is one deterministic, no-modes superset of the JSON-family dialects (JSON5 / HJSON / JSONC / …), so it adopts a feature only where it does not conflict with the others.
-* From **HJSON** it leaves out unquoted *multi-line* strings — its quoteless string values are single-line (use a quoted or triple-quoted `'''…'''` string for multiline), because a newline-spanning unquoted string collides with newline-as-a-document-separator (NDJSON, implicit-root config).
-* From **JSONH** it takes the mainstream features (quoteless keys / values, optional commas between newline-separated members, comments, hex numbers) but **not** the idiosyncratic extensions: binary (`0b`) / octal (`0o`) number literals, verbatim strings (`@"…"`), nestable block comments (`/=* *=/`), or its `\e` / `\a` escapes — the last conflict with the JSON5 / ECMAScript rule that an unrecognized escape is the character itself (`"\e"` → `"e"`). (Want binary or octal literals? Open an issue.)
+HJSON and JSONH are deliberate subsets. SmarterJSON is one deterministic, no-modes superset of the JSON-family dialects (JSON5 / HJSON / JSONC / …), so it adopts a feature only where it does not conflict with the others.
+
+<sup>†</sup>From **HJSON** we leave out unquoted *multi-line* strings — its quoteless string values are single-line (use a quoted or triple-quoted `'''…'''` string for multiline), because a newline-spanning unquoted string collides with newline-as-a-document-separator (NDJSON, implicit-root config).
+
+<sup>‡</sup>From **JSONH** we take the mainstream features (quoteless keys / values, optional commas between newline-separated members, comments, hex numbers) but **not** the idiosyncratic extensions: binary (`0b`) / octal (`0o`) number literals, verbatim strings (`@"…"`), nestable block comments (`/=* *=/`), or its `\e` / `\a` escapes — the last conflict with the JSON5 / ECMAScript rule that an unrecognized escape is the character itself (`"\e"` → `"e"`). Tip: you can use quoteless strings instead of verbatim strings. Want binary or octal literals? Open an issue.
 
 ## Installation
 
