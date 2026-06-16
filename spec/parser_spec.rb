@@ -103,6 +103,36 @@ RSpec.describe SmarterJSON do
             expect(SmarterJSON.process_one('"\/"', acceleration: acceleration)).to eq("/")
           end
 
+          it 'parses \\v (vertical tab) and \\0 (null) escapes (JSON5 / ES5)' do
+            expect(SmarterJSON.process_one('"a\vb"', acceleration: acceleration)).to eq("a\vb")
+            expect(SmarterJSON.process_one('"a\0b"', acceleration: acceleration)).to eq("a\0b")
+          end
+
+          it 'parses \\xHH hex escapes (JSON5 / ES5) as the U+00HH code point' do
+            expect(SmarterJSON.process_one('"\x41\x42"', acceleration: acceleration)).to eq("AB")
+            expect(SmarterJSON.process_one('"\xFF"', acceleration: acceleration)).to eq([0xFF].pack("U")) # U+00FF, emitted as UTF-8
+          end
+
+          it 'passes an unknown escape through to the character itself (ES5 NonEscapeCharacter)' do
+            # \q / \z are not recognized escapes; JSON5 / ES5 yield the character itself, silently.
+            expect(SmarterJSON.process_one('"\q\z"', acceleration: acceleration)).to eq("qz")
+          end
+
+          it 'does not warn on an unknown-escape passthrough (valid JSON5, not a repair)' do
+            warnings = []
+            SmarterJSON.process_one('"\q"', acceleration: acceleration, on_warning: ->(w) { warnings << w })
+            expect(warnings).to be_empty
+          end
+
+          it 'still raises on octal-looking \\0<digit> (JSON5 forbids octal)' do
+            expect { SmarterJSON.process_one('"\07"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          end
+
+          it 'still raises on a malformed \\x escape (needs two hex digits)' do
+            expect { SmarterJSON.process_one('"\xG1"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+            expect { SmarterJSON.process_one('"\x4"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          end
+
           it 'parses BMP \\uXXXX escape' do
             expect(SmarterJSON.process('"A"', acceleration: acceleration)).to eq(["A"])
             expect(SmarterJSON.process_one('"A"', acceleration: acceleration)).to eq("A")
@@ -298,6 +328,71 @@ RSpec.describe SmarterJSON do
           it "parses NaN" do
             expect(SmarterJSON.process("NaN", acceleration: acceleration).first).to be_a(Float).and(be_nan)
             expect(SmarterJSON.process_one("NaN", acceleration: acceleration)).to be_a(Float).and(be_nan)
+          end
+
+          it "parses +Infinity at the top level" do
+            expect(SmarterJSON.process("+Infinity", acceleration: acceleration)).to eq([Float::INFINITY])
+            expect(SmarterJSON.process_one("+Infinity", acceleration: acceleration)).to eq(Float::INFINITY)
+          end
+
+          it "parses NaN and Infinity as array elements" do
+            result = SmarterJSON.process_one("[1, NaN, Infinity, -Infinity]", acceleration: acceleration)
+            expect(result[0]).to eq(1)
+            expect(result[1]).to be_a(Float).and(be_nan)
+            expect(result[2]).to eq(Float::INFINITY)
+            expect(result[3]).to eq(-Float::INFINITY)
+          end
+
+          it "returns real Float objects (Float::INFINITY / Float::NAN), usable as numbers" do
+            inf = SmarterJSON.process_one("Infinity", acceleration: acceleration)
+            nan = SmarterJSON.process_one("NaN", acceleration: acceleration)
+            expect(inf).to be_a(Float)
+            expect(inf.infinite?).to eq(1) # +Infinity (Float#infinite? => 1)
+            expect(inf + 1).to eq(Float::INFINITY) # arithmetic works
+            expect(nan).to be_a(Float)
+            expect(nan).to be_nan      # <-- the real check: did SmarterJSON return a true NaN?
+            expect(nan).not_to eq(nan) # <-- just re-demonstrates IEEE behavior (NaN != itself), not OUR behavior
+          end
+
+          it "classifies recognized literals to their values alongside NaN/Infinity (recognized-literals-win)" do
+            result = SmarterJSON.process_one(<<~JSON, acceleration: acceleration)
+              {
+                happy: True,
+                sad: False,
+                nothing: None,
+                missing: undefined,
+                score: Infinity,
+                debt: -Infinity,
+                ratio: NaN
+              }
+            JSON
+            expect(result["happy"]).to be(true)
+            expect(result["sad"]).to be(false)
+            expect(result["nothing"]).to be_nil
+            expect(result["missing"]).to be_nil
+            expect(result["score"]).to eq(Float::INFINITY)
+            expect(result["debt"]).to eq(-Float::INFINITY)
+            expect(result["ratio"]).to be_a(Float).and(be_nan)
+          end
+        end
+
+        describe "recognized-literal classification boundaries" do
+          # The literal classification (true/True, false/False, null/None/undefined,
+          # NaN, Infinity) applies ONLY to unquoted tokens, and matches exactly.
+
+          it "keeps a QUOTED recognized literal as a string (classification is quoteless-only)" do
+            expect(SmarterJSON.process_one('{"a": "True"}', acceleration: acceleration)).to eq({ "a" => "True" })
+            expect(SmarterJSON.process_one('{"a": "NaN"}', acceleration: acceleration)).to eq({ "a" => "NaN" })
+            expect(SmarterJSON.process_one('{"a": "Infinity"}', acceleration: acceleration)).to eq({ "a" => "Infinity" })
+            expect(SmarterJSON.process_one('{"a": "None"}', acceleration: acceleration)).to eq({ "a" => "None" })
+            expect(SmarterJSON.process_one('{"a": "null"}', acceleration: acceleration)).to eq({ "a" => "null" })
+          end
+
+          it "does not recognize wrong-case variants (exact match) — they stay quoteless strings" do
+            expect(SmarterJSON.process_one("{a: TRUE}", acceleration: acceleration)).to eq({ "a" => "TRUE" })
+            expect(SmarterJSON.process_one("{a: nan}", acceleration: acceleration)).to eq({ "a" => "nan" })
+            expect(SmarterJSON.process_one("{a: infinity}", acceleration: acceleration)).to eq({ "a" => "infinity" })
+            expect(SmarterJSON.process_one("{a: NONE}", acceleration: acceleration)).to eq({ "a" => "NONE" })
           end
         end
 
@@ -581,7 +676,7 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           end
         end
 
-        describe "leading-zero numbers fall through to quoteless strings" do
+        describe "bare leading-zero integers fall through to quoteless strings" do
           it 'parses 0080 as the string "0080"' do
             expect(SmarterJSON.process("port: 0080", acceleration: acceleration)).to eq([{ "port" => "0080" }])
             expect(SmarterJSON.process_one("port: 0080", acceleration: acceleration)).to eq({ "port" => "0080" })
@@ -595,6 +690,67 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           it 'parses 02 as the string "02"' do
             expect(SmarterJSON.process("n: 02", acceleration: acceleration)).to eq([{ "n" => "02" }])
             expect(SmarterJSON.process_one("n: 02", acceleration: acceleration)).to eq({ "n" => "02" })
+          end
+        end
+
+        describe "leading-zero numbers with sign / dot / exponent parse as numbers" do
+          # A leading-zero token carries numeric intent — and parses as a NUMBER — when it
+          # has a sign, a decimal point, or an exponent. A BARE leading-zero integer stays a
+          # string (block above) so zip / account / check numbers keep their zeros; IDs never
+          # carry a sign, dot, or exponent.
+
+          it "parses a signed leading-zero integer as a number" do
+            expect(SmarterJSON.process_one("{a: +007, b: -007}", acceleration: acceleration)).to eq({ "a" => 7, "b" => -7 })
+          end
+
+          it "parses a leading-zero decimal as a number" do
+            expect(SmarterJSON.process_one("{a: 00.00, b: -000023.5, c: 00001.5}", acceleration: acceleration)).to eq({ "a" => 0.0, "b" => -23.5, "c" => 1.5 })
+          end
+
+          it "parses leading-zero scientific notation as a number" do
+            expect(SmarterJSON.process_one("{a: 00e5, b: 007e2, c: +00e5}", acceleration: acceleration)).to eq({ "a" => 0.0, "b" => 700.0, "c" => 0.0 })
+          end
+
+          it "applies in arrays and at the top level too" do
+            expect(SmarterJSON.process_one("[000001, -000023.5, 007e2]", acceleration: acceleration)).to eq(["000001", -23.5, 700.0])
+            expect(SmarterJSON.process_one("-000023.5", acceleration: acceleration)).to eq(-23.5)
+            expect(SmarterJSON.process_one("+007", acceleration: acceleration)).to eq(7)
+          end
+
+          it "a bare leading-zero integer still has no top-level form (raises)" do
+            expect { SmarterJSON.process_one("000001", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          end
+
+          it "leaves single-zero and non-leading-zero numbers unchanged" do
+            expect(SmarterJSON.process_one("{a: 0, b: 0.5, c: -0, d: 1.5e3}", acceleration: acceleration)).to eq({ "a" => 0, "b" => 0.5, "c" => 0, "d" => 1500.0 })
+          end
+
+          it "treats an underscore right after the leading zero like any other leading-zero run" do
+            # 0_0.5 is 00.5 once the underscore is removed -> a number, because of the dot;
+            # 0_0e5 is 00e5 -> a number, because of the exponent. Both paths must agree (the C
+            # scanner once bailed on the 0_<digit> shape and kept the whole token a string).
+            expect(SmarterJSON.process_one("{a: 0_0.5, b: 0_0e5}", acceleration: acceleration)).to eq({ "a" => 0.5, "b" => 0.0 })
+            # a bare 0_0 (no sign / dot / exponent) is still an ID -> string.
+            expect(SmarterJSON.process_one("{a: 0_0, b: 0_07}", acceleration: acceleration)).to eq({ "a" => "0_0", "b" => "0_07" })
+          end
+
+          it "treats 0_<digit> at the top level just like the underscore-free form" do
+            # The underscore is only a digit separator, so 0_0.5 behaves like 00.5 everywhere:
+            # at the top level it is a recognized number (00.5 -> 0.5 there too).
+            expect(SmarterJSON.process_one("0_0.5", acceleration: acceleration)).to eq(0.5)
+            expect(SmarterJSON.process_one("0_0e5", acceleration: acceleration)).to eq(0.0)
+            # ...while a bare 0_0 has no top-level form, same as 00 / 000001 -> it raises.
+            expect { SmarterJSON.process_one("0_0", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          end
+        end
+
+        describe "version-like strings (multiple dots) stay strings" do
+          it "keeps dotted version numbers as strings on both paths" do
+            expect(SmarterJSON.process_one("{a: 1.1.0, b: 0.0.2, c: 2.0.0.1, d: 2.0.2.0.pre1}", acceleration: acceleration)).to eq({ "a" => "1.1.0", "b" => "0.0.2", "c" => "2.0.0.1", "d" => "2.0.2.0.pre1" })
+          end
+
+          it "keeps leading-zero version numbers as strings too" do
+            expect(SmarterJSON.process_one("{a: 00.0.2, b: 007.0.1, c: 0.9.7}", acceleration: acceleration)).to eq({ "a" => "00.0.2", "b" => "007.0.1", "c" => "0.9.7" })
           end
         end
 
@@ -872,6 +1028,46 @@ second"', acceleration: acceleration)).to eq("firstsecond")
               input = "{\"msg\": \u201cHe said \"hi\" loudly\u201d}"
               expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq({ "msg" => "He said \"hi\" loudly" })
             end
+          end
+        end
+
+        describe "Null / NULL (SQL / R / PHP / YAML null)" do
+          # Null and NULL join null / None / undefined as recognized spellings of nil
+          # (SQL / R / PHP var_export / YAML / DB-derived input). TRUE/FALSE are intentionally
+          # NOT added — uppercase booleans have far thinner precedent (see CHANGELOG/discussion).
+
+          it "parses Null as nil (top level)" do
+            expect(SmarterJSON.process("Null", acceleration: acceleration)).to eq([nil])
+            expect(SmarterJSON.process_one("Null", acceleration: acceleration)).to be_nil
+          end
+
+          it "parses NULL as nil (top level)" do
+            expect(SmarterJSON.process("NULL", acceleration: acceleration)).to eq([nil])
+            expect(SmarterJSON.process_one("NULL", acceleration: acceleration)).to be_nil
+          end
+
+          it "recognizes Null / NULL as object value and array element" do
+            expect(SmarterJSON.process_one("{a: Null, b: NULL}", acceleration: acceleration)).to eq({ "a" => nil, "b" => nil })
+            expect(SmarterJSON.process_one("[Null, NULL]", acceleration: acceleration)).to eq([nil, nil])
+          end
+
+          it "recognizes Null / NULL surrounded by whitespace" do
+            expect(SmarterJSON.process_one("{ a:   Null   , b:  NULL  }", acceleration: acceleration)).to eq({ "a" => nil, "b" => nil })
+          end
+
+          it "keeps a QUOTED Null / NULL as a string (classification is quoteless-only)" do
+            expect(SmarterJSON.process_one('{"a": "Null"}', acceleration: acceleration)).to eq({ "a" => "Null" })
+            expect(SmarterJSON.process_one('{"a": "NULL"}', acceleration: acceleration)).to eq({ "a" => "NULL" })
+          end
+
+          it "does NOT recognize Null / NULL embedded in a larger token (stays a string)" do
+            expect(SmarterJSON.process_one("{a: NULL Island}", acceleration: acceleration)).to eq({ "a" => "NULL Island" })
+            expect(SmarterJSON.process_one("{a: Null and void}", acceleration: acceleration)).to eq({ "a" => "Null and void" })
+            expect(SmarterJSON.process_one("{a: Nullable}", acceleration: acceleration)).to eq({ "a" => "Nullable" })
+          end
+
+          it "leaves None / null / undefined unchanged (still nil)" do
+            expect(SmarterJSON.process_one("{a: None, b: null, c: undefined}", acceleration: acceleration)).to eq({ "a" => nil, "b" => nil, "c" => nil })
           end
         end
 
@@ -1258,8 +1454,9 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
 
         it "raises SmarterJSON::ParseError on bad escape sequence" do
-          expect { SmarterJSON.process('"\q"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /escape/)
-          expect { SmarterJSON.process_one('"\q"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /escape/)
+          # \q is no longer "bad" (JSON5 NonEscapeCharacter -> 'q'); a malformed \x still is.
+          expect { SmarterJSON.process('"\xZZ"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /escape/)
+          expect { SmarterJSON.process_one('"\xZZ"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /escape/)
         end
 
         it "reports line and column on the error" do
@@ -1587,6 +1784,40 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
       end
 
+      describe "JSON5 spec conformance sweep (spec.json5.org)" do
+        # Production-by-production check of JSON5's extensions over strict JSON. Items already
+        # covered above (leading/trailing decimal point, hex incl. negative, single-quoted
+        # *values*, Infinity / NaN, comments, trailing commas, smart quotes, the \v \0 \xHH
+        # and NonEscapeCharacter escapes) are not duplicated here; this pins the ones the
+        # conformance review surfaced as untested.
+
+        it "accepts a single-quoted object KEY" do
+          expect(SmarterJSON.process_one("{'k': 1}", acceleration: acceleration)).to eq({ "k" => 1 })
+        end
+
+        it "accepts unquoted reserved words as object keys (ECMAScript IdentifierName)" do
+          expect(SmarterJSON.process_one("{if: 1, return: 2, true: 3, null: 4}", acceleration: acceleration)).to eq({ "if" => 1, "return" => 2, "true" => 3, "null" => 4 })
+        end
+
+        it "accepts a positive-signed hexadecimal number (+0x1A)" do
+          expect(SmarterJSON.process_one("+0x1A", acceleration: acceleration)).to eq(26)
+        end
+
+        it "accepts unescaped control characters inside a string (ES5: any char but quote / backslash / line terminator)" do
+          input = "\"a\tbc\"" # a, then a literal TAB (U+0009 control char) which strict JSON forbids unescaped, then bc
+          expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq("a\tbc")
+        end
+
+        it "treats the full JSON5 / ES5 whitespace set as inter-token whitespace" do
+          # U+0009 TAB, U+000B VT, U+000C FF, U+0020 SP, U+00A0 NBSP, U+2000 (Zs),
+          # U+2028 LS, U+2029 PS, U+FEFF BOM -- all are WhiteSpace in the JSON5 grammar.
+          [0x09, 0x0B, 0x0C, 0x20, 0xA0, 0x2000, 0x2028, 0x2029, 0xFEFF].each do |cp|
+            w = [cp].pack("U")
+            expect(SmarterJSON.process_one("[#{w}1#{w},#{w}2#{w}]", acceleration: acceleration)).to eq([1, 2]), format("U+%04X should be whitespace", cp)
+          end
+        end
+      end
+
       describe "parser edge cases (coverage)" do
         it "parses undefined as nil" do
           expect(SmarterJSON.process("undefined", acceleration: acceleration)).to eq([nil])
@@ -1792,9 +2023,9 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect(result["true1"]).to eq(true)
           expect(result["false1"]).to eq(false)
           expect(result["null1"]).to be_nil
-          expect(result["str1"]).to eq("00")                        # leading zero → string
-          expect(result["str2"]).to eq("00.0")
-          expect(result["str3"]).to eq("02")
+          expect(result["str1"]).to eq("00")                        # bare leading zero -> string (same case as an account number)
+          expect(result["str2"]).to eq(0.0)                         # leading zero + dot -> number
+          expect(result["str3"]).to eq("02")                        # bare leading zero -> string (same case as an account number)
         end
 
         it "parses strings_test.hjson and recognizes string-vs-literal distinction" do

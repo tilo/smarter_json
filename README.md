@@ -8,7 +8,7 @@ A lenient, fast JSON processor for Ruby. It extracts strict JSON, NDJSON, JSONL,
 
 ## Features at a glance
 
-- **Reads the whole human-JSON superset, no modes or flags** — strict JSON, NDJSON, JSONL, JSON5, HJSON, JSONC, plus comments, trailing commas, unquoted / single / triple / smart quotes, an implicit root object, `NaN` / `Infinity` / hex / underscores, Python & JavaScript literals, a UTF-8 BOM, mixed line endings, and any Ruby encoding (see [What it accepts](#what-it-accepts-beyond-strict-json) for the full list).
+- **Reads the whole human-JSON superset, no modes or flags** — strict JSON, NDJSON, JSONL, JSON5, HJSON, JSONC, plus comments, trailing commas, unquoted / single / triple / smart quotes, an implicit root object, `NaN` / `Infinity` / hex / underscores, Python / JavaScript / SQL literals, a UTF-8 BOM, mixed line endings, and any Ruby encoding (see [What it accepts](#what-it-accepts-beyond-strict-json) for the full list).
 - **Every document from multi-document input, in one call** — `process` returns an `Array` of all of them; `process_one` returns the single value and warns if there was more than one (never raises; routed to `on_warning`, else `Rails.logger`, else `Kernel.warn`).
 - **Streaming in bounded memory** — pass a block, or use `foreach(path_or_io)` for a composable `Enumerator` you can `.select` / `.map` / `.lazy` over.
 - **Recovers JSON from LLM / markdown noise** — strips markdown code fences, surrounding prose, and `<json>` tags, and pulls every payload out of one messy blob.
@@ -73,9 +73,11 @@ Three things set it apart:
 - `//`, `/* … */`, and `#` comments (a `#`/`//` only starts a comment when preceded by whitespace, so `url: http://x.com` is read as a string, not a truncated value)
 - Markdown-wrapped / chatty blobs around the payload: strips ```` ```json ```` / ```` ``` ```` fences, ignores obvious prose before/after the payload, unwraps `<json>...</json>` and `BEGIN_JSON ... END_JSON`, and preserves multiple recovered payloads as an Array
 - Trailing commas; unquoted keys (`{host: localhost}`); single-quoted, triple-quoted (`'''…'''`), and quoteless string values
+- Full JSON5 / ECMAScript string escapes — `\uXXXX` (with surrogate pairs), `\xHH` (`"\x41"` → `"A"`), `\v`, `\0`, line continuation; an unrecognized escape yields the character itself (`"\q"` → `"q"`)
 - Implicit root object — a config file that starts with `key: value`, no outer `{}`
 - `NaN`, `Infinity`, hex (`0xFF`), leading `+` / `.`, underscores in numbers (`1_000_000`)
-- UTF-8 BOM, smart/curly quotes (in keys and values), Python literals (`True` / `False` / `None`), JavaScript `undefined`
+- Leading-zero numbers (which strict JSON rejects): a token with a sign, decimal point, or exponent reads as a number (`-007.5` → `-7.5`, `007e2` → `700.0`), but a bare leading-zero integer is kept as a string (`007`, `02`) so IDs, zip codes, and account numbers don't lose their zeros
+- UTF-8 BOM, smart/curly quotes (in keys and values), Python literals (`True` / `False` / `None`), JavaScript `undefined`, case-variant null (`Null` / `NULL`, as SQL / R / PHP / YAML emit it)
 - Mixed CR / LF / CRLF line endings, and any Ruby-supported input encoding (via `encoding:`)
 - Duplicate keys (last value wins by default; configurable)
 
@@ -89,11 +91,15 @@ The lenient grammar is a superset of these human-JSON specs — listed once, her
 * [HJSON](https://hjson.github.io/) <sup>†</sup>
 * [JWCC / HuJSON](https://github.com/tailscale/hujson)
 * [Nigel Tao](https://nigeltao.github.io/blog/2021/json-with-commas-comments.html)
-* [JSONH](https://github.com/jsonh-org/Jsonh)
+* [JSONH](https://github.com/jsonh-org/Jsonh) <sup>‡</sup>
 * [JSONC (VS Code)](https://jsonc.org/)
 * [NDJSON / JSON Text Sequences (RFC 7464)](https://datatracker.ietf.org/doc/html/rfc7464).
 
-<sup>†</sup> A deliberate subset. SmarterJSON's quoteless (unquoted) string values are single-line — it does **not** parse HJSON's unquoted multi-line strings; use a quoted or triple-quoted (`'''…'''`) string for multiline. This is by design: SmarterJSON is one deterministic, no-modes superset of the JSON-family dialects (JSON5 / HJSON / JSONC / …), so it adopts a feature only where it does not conflict with the others — and an unquoted string that may span newlines collides with newline-as-a-document-separator (NDJSON, implicit-root config), so it is left out.
+HJSON and JSONH are deliberate subsets. SmarterJSON is one deterministic, no-modes superset of the JSON-family dialects (JSON5 / HJSON / JSONC / …), so it adopts a feature only where it does not conflict with the others.
+
+<sup>†</sup>From **HJSON** we leave out unquoted *multi-line* strings — its quoteless string values are single-line (use a quoted or triple-quoted `'''…'''` string for multiline), because a newline-spanning unquoted string collides with newline-as-a-document-separator (NDJSON, implicit-root config).
+
+<sup>‡</sup>From **JSONH** we take the mainstream features (quoteless keys / values, optional commas between newline-separated members, comments, hex numbers) but **not** the idiosyncratic extensions: binary (`0b`) / octal (`0o`) number literals, verbatim strings (`@"…"`), nestable block comments (`/=* *=/`), or its `\e` / `\a` escapes — the last conflict with the JSON5 / ECMAScript rule that an unrecognized escape is the character itself (`"\e"` → `"e"`). Tip: you can use quoteless strings instead of verbatim strings. Want binary or octal literals? Open an issue.
 
 ## Installation
 
