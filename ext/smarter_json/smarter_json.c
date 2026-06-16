@@ -169,13 +169,14 @@ static void fj_advance(fj_state *st, long n) {
 static int fj_is_ws(int b) { return b == 0x20 || (b >= 0x09 && b <= 0x0D); }
 
 /* Length (1..3) of the Unicode whitespace char starting at p (n bytes
- * available), or 0. Matches Ruby's [[:space:]]; see smarter_json.md §4.7.
- * Reject-gate: only C2/E1/E2/E3 can begin a whitespace char. */
+ * available), or 0. Matches Ruby's [[:space:]], plus U+FEFF (BOM) — JSON5 / ES5 count
+ * the BOM as whitespace though Unicode White_Space does not; see smarter_json.md §4.7.
+ * Reject-gate: only C2/E1/E2/E3/EF can begin one of these chars. */
 static long fj_mbws(const char *p, long n) {
   int b0, b1, b2;
   if (n < 1) return 0;
   b0 = (unsigned char)p[0];
-  if (b0 != 0xC2 && (b0 < 0xE1 || b0 > 0xE3)) return 0;
+  if (b0 != 0xC2 && (b0 < 0xE1 || b0 > 0xE3) && b0 != 0xEF) return 0;
   if (n < 2) return 0;
   b1 = (unsigned char)p[1];
   if (b0 == 0xC2) return (b1 == 0xA0 || b1 == 0x85) ? 2 : 0;
@@ -188,6 +189,7 @@ static long fj_mbws(const char *p, long n) {
     return 0;
   }
   if (b0 == 0xE3) return (b1 == 0x80 && b2 == 0x80) ? 3 : 0;
+  if (b0 == 0xEF) return (b1 == 0xBB && b2 == 0xBF) ? 3 : 0; /* U+FEFF (JSON5 / ES5 BOM ws) */
   return 0;
 }
 
@@ -398,8 +400,24 @@ static VALUE fj_parse_string(fj_state *st, int quote) {
         case 'n':  rb_str_buf_cat(buf, "\n", 1); fj_advance(st, 1); break;
         case 'r':  rb_str_buf_cat(buf, "\r", 1); fj_advance(st, 1); break;
         case 't':  rb_str_buf_cat(buf, "\t", 1); fj_advance(st, 1); break;
+        case 'v':  rb_str_buf_cat(buf, "\v", 1); fj_advance(st, 1); break; /* JSON5 / ES5 */
         case 0x0A: fj_advance(st, 1); break; /* \<LF>: line continuation */
         case 0x0D: fj_advance(st, 1); if (fj_byte(st) == 0x0A) fj_advance(st, 1); break;
+        case '0': /* JSON5 / ES5 \0 -> NUL; a following digit would be octal -> forbidden */
+          fj_advance(st, 1);
+          { int nx = fj_byte(st); if (nx >= '0' && nx <= '9') fj_error(st, "invalid \\0 escape (octal not allowed)"); }
+          rb_str_buf_cat(buf, "\0", 1);
+          break;
+        case 'x': { /* JSON5 / ES5 \xHH -> code point U+00HH (emitted as UTF-8) */
+          int h1, h2;
+          fj_advance(st, 1);
+          h1 = fj_hex_val(fj_byte(st));
+          h2 = fj_hex_val(fj_byte_at(st, 1));
+          if (h1 < 0 || h2 < 0) fj_error(st, "invalid \\x escape");
+          fj_advance(st, 2);
+          fj_append_utf8(buf, (unsigned long)((h1 << 4) | h2));
+          break;
+        }
         case 'u': {
           unsigned long cp;
           fj_advance(st, 1);
@@ -418,7 +436,12 @@ static VALUE fj_parse_string(fj_state *st, int quote) {
           break;
         }
         default:
-          fj_error(st, "invalid escape");
+          /* ES5 NonEscapeCharacter: an unrecognized escape yields the character itself.
+           * Emit the escaped byte; a multibyte UTF-8 char's continuation bytes follow as
+           * literal content (next loop iterations), reconstructing the whole character. */
+          rb_str_buf_cat(buf, st->buf + st->pos, 1);
+          fj_advance(st, 1);
+          break;
       }
     } else {
       /* Literal run between escapes: NEON-scan to the next quote/backslash and

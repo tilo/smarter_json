@@ -103,6 +103,36 @@ RSpec.describe SmarterJSON do
             expect(SmarterJSON.process_one('"\/"', acceleration: acceleration)).to eq("/")
           end
 
+          it 'parses \\v (vertical tab) and \\0 (null) escapes (JSON5 / ES5)' do
+            expect(SmarterJSON.process_one('"a\vb"', acceleration: acceleration)).to eq("a\vb")
+            expect(SmarterJSON.process_one('"a\0b"', acceleration: acceleration)).to eq("a\0b")
+          end
+
+          it 'parses \\xHH hex escapes (JSON5 / ES5) as the U+00HH code point' do
+            expect(SmarterJSON.process_one('"\x41\x42"', acceleration: acceleration)).to eq("AB")
+            expect(SmarterJSON.process_one('"\xFF"', acceleration: acceleration)).to eq([0xFF].pack("U")) # U+00FF, emitted as UTF-8
+          end
+
+          it 'passes an unknown escape through to the character itself (ES5 NonEscapeCharacter)' do
+            # \q / \z are not recognized escapes; JSON5 / ES5 yield the character itself, silently.
+            expect(SmarterJSON.process_one('"\q\z"', acceleration: acceleration)).to eq("qz")
+          end
+
+          it 'does not warn on an unknown-escape passthrough (valid JSON5, not a repair)' do
+            warnings = []
+            SmarterJSON.process_one('"\q"', acceleration: acceleration, on_warning: ->(w) { warnings << w })
+            expect(warnings).to be_empty
+          end
+
+          it 'still raises on octal-looking \\0<digit> (JSON5 forbids octal)' do
+            expect { SmarterJSON.process_one('"\07"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          end
+
+          it 'still raises on a malformed \\x escape (needs two hex digits)' do
+            expect { SmarterJSON.process_one('"\xG1"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+            expect { SmarterJSON.process_one('"\x4"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+          end
+
           it 'parses BMP \\uXXXX escape' do
             expect(SmarterJSON.process('"A"', acceleration: acceleration)).to eq(["A"])
             expect(SmarterJSON.process_one('"A"', acceleration: acceleration)).to eq("A")
@@ -1424,8 +1454,9 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         end
 
         it "raises SmarterJSON::ParseError on bad escape sequence" do
-          expect { SmarterJSON.process('"\q"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /escape/)
-          expect { SmarterJSON.process_one('"\q"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /escape/)
+          # \q is no longer "bad" (JSON5 NonEscapeCharacter -> 'q'); a malformed \x still is.
+          expect { SmarterJSON.process('"\xZZ"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /escape/)
+          expect { SmarterJSON.process_one('"\xZZ"', acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError, /escape/)
         end
 
         it "reports line and column on the error" do
@@ -1750,6 +1781,40 @@ second"', acceleration: acceleration)).to eq("firstsecond")
 
         it "raises on bracketless comma-separated bare words (each is a bare top-level word)" do
           expect { SmarterJSON.process("red, green, blue", acceleration: acceleration) }.to raise_error(SmarterJSON::ParseError)
+        end
+      end
+
+      describe "JSON5 spec conformance sweep (spec.json5.org)" do
+        # Production-by-production check of JSON5's extensions over strict JSON. Items already
+        # covered above (leading/trailing decimal point, hex incl. negative, single-quoted
+        # *values*, Infinity / NaN, comments, trailing commas, smart quotes, the \v \0 \xHH
+        # and NonEscapeCharacter escapes) are not duplicated here; this pins the ones the
+        # conformance review surfaced as untested.
+
+        it "accepts a single-quoted object KEY" do
+          expect(SmarterJSON.process_one("{'k': 1}", acceleration: acceleration)).to eq({ "k" => 1 })
+        end
+
+        it "accepts unquoted reserved words as object keys (ECMAScript IdentifierName)" do
+          expect(SmarterJSON.process_one("{if: 1, return: 2, true: 3, null: 4}", acceleration: acceleration)).to eq({ "if" => 1, "return" => 2, "true" => 3, "null" => 4 })
+        end
+
+        it "accepts a positive-signed hexadecimal number (+0x1A)" do
+          expect(SmarterJSON.process_one("+0x1A", acceleration: acceleration)).to eq(26)
+        end
+
+        it "accepts unescaped control characters inside a string (ES5: any char but quote / backslash / line terminator)" do
+          input = "\"a\tbc\"" # a, then a literal TAB (U+0009 control char) which strict JSON forbids unescaped, then bc
+          expect(SmarterJSON.process_one(input, acceleration: acceleration)).to eq("a\tbc")
+        end
+
+        it "treats the full JSON5 / ES5 whitespace set as inter-token whitespace" do
+          # U+0009 TAB, U+000B VT, U+000C FF, U+0020 SP, U+00A0 NBSP, U+2000 (Zs),
+          # U+2028 LS, U+2029 PS, U+FEFF BOM -- all are WhiteSpace in the JSON5 grammar.
+          [0x09, 0x0B, 0x0C, 0x20, 0xA0, 0x2000, 0x2028, 0x2029, 0xFEFF].each do |cp|
+            w = [cp].pack("U")
+            expect(SmarterJSON.process_one("[#{w}1#{w},#{w}2#{w}]", acceleration: acceleration)).to eq([1, 2]), format("U+%04X should be whitespace", cp)
+          end
         end
       end
 

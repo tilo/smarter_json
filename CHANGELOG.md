@@ -12,12 +12,14 @@
 > ⚠️ We discourage the use of `process(input).first` / `process(input)[0]` because it silently drops potential additional documents
 >    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads, because it emits on_warning if it finds multiple docs.
 
-## 1.2.0 (unreleased)
+## 1.2.0 (2026-06-16)
 
-RSpec tests: 1,143
+RSpec tests: 1,097 → 1,165
 
 - A leading-zero token now reads as a number when it carries a sign, a decimal point, or an exponent (`+007` → `7`, `-000023.5` → `-23.5`, `00.0` → `0.0`, `007e2` → `700.0`) — previously these were kept as strings. A bare leading-zero integer (`000001`, `02`) still reads as a string, so IDs, zip codes, and account numbers keep their zeros.
 - `Null` and `NULL` are now read as `nil` (joining `null` / `None` / `undefined`), for SQL / R / PHP / YAML / DB-derived input — in every position the existing spellings work. Quoted (`"NULL"`) or embedded (`NULL Island`) forms stay strings.
+- String escapes now cover the full JSON5 / ECMAScript set: `\xHH` hex escapes (`"\x41"` → `"A"`), `\v` (vertical tab), `\0` (null), and an unrecognized escape now yields the character itself (`"\q"` → `"q"`) instead of raising. A malformed `\x` and an octal-style `\0` followed by a digit still raise.
+- A `U+FEFF` (BOM / zero-width no-break space) is now skipped as whitespace anywhere between tokens — matching JSON5 / ECMAScript — not only as a leading byte-order mark, so a stray BOM mid-stream (e.g. from concatenated files) no longer corrupts the adjacent value into a string. Inside a quoted string it stays content.
 
 ## 1.1.2 (2026-06-12)
 

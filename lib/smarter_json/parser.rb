@@ -756,7 +756,9 @@ module SmarterJSON
     # (',' '}' ']' '{' '[') OR any whitespace ([[:space:]] covers ASCII + Unicode space,
     # incl. LF/CR which also terminate). Stopping at a terminator/EOF means the run had no
     # interior whitespace, so there's nothing to trim and no comment marker can apply.
-    QL_BREAK = /[,{}\[\]]|[[:space:]]/.freeze
+    #
+    # U+FEFF is JSON5/ES5 whitespace but not in [[:space:]], so we need to add it:
+    QL_BREAK = /[,{}\[\]]|[[:space:]]|#{[0xFEFF].pack("U")}/.freeze
 
     # The defaults live centrally in SmarterJSON::Options (lib/smarter_json/options.rb).
     DEFAULT_OPTIONS = Options::DEFAULT_OPTIONS
@@ -1103,7 +1105,7 @@ module SmarterJSON
     # Only meaningful for bytes >= 0x80.
     def multibyte_ws_len(pos)
       b0 = @input.getbyte(pos)
-      return 0 if b0 != 0xC2 && (b0 < 0xE1 || b0 > 0xE3) # reject-gate
+      return 0 if b0 != 0xC2 && (b0 < 0xE1 || b0 > 0xE3) && b0 != 0xEF # reject-gate (EF -> U+FEFF)
 
       b1 = @input.getbyte(pos + 1)
       return 0 if b1.nil?
@@ -1123,6 +1125,8 @@ module SmarterJSON
         end
       when 0xE3
         return 3 if b1 == 0x80 && b2 == 0x80                 # U+3000
+      when 0xEF
+        return 3 if b1 == 0xBB && b2 == 0xBF                 # U+FEFF (JSON5 / ES5 BOM ws)
       end
       0
     end
@@ -1623,6 +1627,12 @@ module SmarterJSON
         when 0x6E      then buf << "\n".b
         when 0x72      then buf << "\r".b
         when 0x74      then buf << "\t".b
+        when 0x76      then buf << "\v".b # JSON5 / ES5 vertical tab
+        when ZERO # JSON5 / ES5 \0 -> NUL; a following digit would be octal -> forbidden
+          nxt = @input.getbyte(i + 1)
+          raise error("invalid \\0 escape (octal not allowed)") if nxt && nxt >= ZERO && nxt <= NINE
+
+          buf << "\x00".b
         when LF
           # JSON5 line continuation: \<LF> emits nothing
         when CR
@@ -1632,8 +1642,19 @@ module SmarterJSON
           buf << [cp].pack("U").b
           i += consumed
           next
+        when LOWER_X # JSON5 / ES5 \xHH -> code point U+00HH (emitted as UTF-8)
+          hex = @input.byteslice(i + 1, 2)
+          raise error("invalid \\x escape") unless hex && hex.bytesize == 2 && hex.b.match?(/\A\h{2}\z/)
+
+          buf << [hex.to_i(16)].pack("U").b
+          i += 3
+          next
         else
-          raise error("invalid escape \\#{esc&.chr || "?"}")
+          # ES5 NonEscapeCharacter: an unrecognized escape yields the character itself.
+          # Emit the escaped byte; a multibyte char's continuation bytes follow as literals.
+          raise error("unterminated string escape") if esc.nil?
+
+          buf << esc
         end
         i += 1
       end

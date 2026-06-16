@@ -73,6 +73,7 @@ Three things set it apart:
 - `//`, `/* … */`, and `#` comments (a `#`/`//` only starts a comment when preceded by whitespace, so `url: http://x.com` is read as a string, not a truncated value)
 - Markdown-wrapped / chatty blobs around the payload: strips ```` ```json ```` / ```` ``` ```` fences, ignores obvious prose before/after the payload, unwraps `<json>...</json>` and `BEGIN_JSON ... END_JSON`, and preserves multiple recovered payloads as an Array
 - Trailing commas; unquoted keys (`{host: localhost}`); single-quoted, triple-quoted (`'''…'''`), and quoteless string values
+- Full JSON5 / ECMAScript string escapes — `\uXXXX` (with surrogate pairs), `\xHH` (`"\x41"` → `"A"`), `\v`, `\0`, line continuation; an unrecognized escape yields the character itself (`"\q"` → `"q"`)
 - Implicit root object — a config file that starts with `key: value`, no outer `{}`
 - `NaN`, `Infinity`, hex (`0xFF`), leading `+` / `.`, underscores in numbers (`1_000_000`)
 - Leading-zero numbers (which strict JSON rejects): a token with a sign, decimal point, or exponent reads as a number (`-007.5` → `-7.5`, `007e2` → `700.0`), but a bare leading-zero integer is kept as a string (`007`, `02`) so IDs, zip codes, and account numbers don't lose their zeros
