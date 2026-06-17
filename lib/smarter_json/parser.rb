@@ -757,8 +757,10 @@ module SmarterJSON
     # incl. LF/CR which also terminate). Stopping at a terminator/EOF means the run had no
     # interior whitespace, so there's nothing to trim and no comment marker can apply.
     #
-    # U+FEFF is JSON5/ES5 whitespace but not in [[:space:]], so we need to add it:
-    QL_BREAK = /[,{}\[\]]|[[:space:]]|#{[0xFEFF].pack("U")}/.freeze
+    # U+FEFF is JSON5/ES5 whitespace but NOT in [[:space:]]. It is deliberately kept OUT of
+    # this regex: a multibyte alternative defeats byteindex's fast byte-search (~3.3x slower
+    # on number-dense input). A trailing U+FEFF is trimmed cheaply in the fast path below.
+    QL_BREAK = /[,{}\[\]]|[[:space:]]/.freeze
 
     # The defaults live centrally in SmarterJSON::Options (lib/smarter_json/options.rb).
     DEFAULT_OPTIONS = Options::DEFAULT_OPTIONS
@@ -1350,7 +1352,14 @@ module SmarterJSON
         b = hit < @bytesize ? input.getbyte(hit) : nil
         if b.nil? || b == COMMA || b == RBRACE || b == RBRACKET || b == LBRACE || b == LBRACKET || b == LF || b == CR
           @pos = hit
-          return hit
+          # A trailing U+FEFF (EF BB BF) is JSON5/ES5 whitespace but not in QL_BREAK, so
+          # byteindex scanned past it into the run — trim it (and a run of them). On the
+          # common path the last byte is a digit/letter, so the first compare fails at once.
+          fin = hit
+          while fin - 3 >= pos && input.getbyte(fin - 1) == 0xBF && input.getbyte(fin - 2) == 0xBB && input.getbyte(fin - 3) == 0xEF
+            fin -= 3
+          end
+          return fin
         end
       end
 
