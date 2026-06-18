@@ -13,6 +13,12 @@
 > ⚠️ We discourage the use of `process(input).first` / `process(input)[0]` because it silently drops potential additional documents
 >    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads, because it emits on_warning if it finds multiple docs.
 
+## 1.2.2 (unreleased)
+
+RSpec tests: 1,167
+
+- The Eisel-Lemire fast path for `decimal_precision: :float` now covers decimals with **up to 19 significant digits** (was 18). 19 digits is the most that fits exactly in a `uint64` (max 19-digit ≈ 1.0e19 < `UINT64_MAX` ≈ 1.8e19), so these no longer fall back to the slower `strtod`. Still correctly rounded, bit-for-bit identical to the stdlib — verified across 18/19-digit round-to-even tie shapes.
+
 ## 1.2.1 (2026-06-17)
 
 RSpec tests: 1,165
