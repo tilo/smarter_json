@@ -2203,6 +2203,21 @@ second"', acceleration: acceleration)).to eq("firstsecond")
             expect(SmarterJSON.process_one("0.12345678901234567", decimal_precision: :float, acceleration: acceleration)).to be_a(Float)
           end
 
+          it "correctly rounds 18- and 19-significant-digit floats (Eisel-Lemire fast path covers <=19 digits, the uint64 limit)" do
+            # 19 sig digits is the most that fits exactly in a uint64, so Eisel-Lemire handles it
+            # without falling back to strtod. Each must be bit-for-bit equal to the stdlib, including
+            # round-to-even tie shapes (mantissa ending in 5).
+            %w[
+              1.23456789012345678 1.234567890123456789 9.999999999999999999
+              1234567890123456.78 0.1234567890123456789 1.000000000000000005
+              2.234567890123456785 9.234567890123456785
+            ].each do |str|
+              v = SmarterJSON.process_one(str, decimal_precision: :float, acceleration: acceleration)
+              expect(v).to be_a(Float)
+              expect(v).to eql(str.to_f), "#{str} (accel=#{acceleration})"
+            end
+          end
+
           it "forces BigDecimal for any decimal with decimal_precision: :bigdecimal" do
             expect(SmarterJSON.process("3.14", decimal_precision: :bigdecimal, acceleration: acceleration)).to eql([BigDecimal("3.14")])
             expect(SmarterJSON.process_one("3.14", decimal_precision: :bigdecimal, acceleration: acceleration)).to eql(BigDecimal("3.14"))

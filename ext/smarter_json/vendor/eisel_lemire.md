@@ -5,7 +5,7 @@
 
 ## What smarter_json uses it for
 
-`fj_float_from_parts` (in `smarter_json.c`) routes `m10digits ≤ 18 → fj_eisel_lemire_s2d`, and `> 18 / overflow / extreme exponent → strtod` (round-to-odd). Eisel-Lemire is correctly-rounded across the whole ≤18-digit range — no round-to-even tie loss — **and** fast on the common short-mantissa case.
+`fj_float_from_parts` (in `smarter_json.c`) routes `m10digits ≤ 19 → fj_eisel_lemire_s2d`, and `> 19 / overflow / extreme exponent → strtod` (round-to-odd). Eisel-Lemire is correctly-rounded across the whole ≤19-digit range — every mantissa that fits exactly in a uint64, no round-to-even tie loss — **and** fast on the common short-mantissa case.
 
 ## These two files are DERIVED, not verbatim copies
 

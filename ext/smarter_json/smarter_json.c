@@ -629,14 +629,15 @@ static VALUE fj_float_strtod(const char *p, long n) {
 /* e10 is the final base-10 exponent (already adjusted by the fraction length). */
 static FJ_ALWAYS_INLINE VALUE fj_float_from_parts(fj_state *st, uint64_t m10, int m10digits, int64_t e10, int neg, int overflow, const char *p, long n) {
   double d;
-  /* Fast path by mantissa width (our scanner accumulates m10 exactly up to 18
+  /* Fast path by mantissa width (our scanner accumulates m10 exactly up to 19
      digits, flagging overflow beyond):
-       1..18 digits -> Eisel-Lemire, correctly-rounded for any exact uint64 mantissa
-                       (Mushtak-Lemire). This pulls full-double-precision data (e.g.
-                       citylots coordinates, 18 sig digits) off the slow strtod
-                       fallback — the stdlib json gem still strtods it.
-     >18 digits / overflow / extreme exponent -> strtod (round-to-odd). */
-  if (!overflow && m10digits >= 1 && m10digits <= 18 && (long)m10digits + e10 >= -307) {
+       1..19 digits -> Eisel-Lemire, correctly-rounded for any exact uint64 mantissa
+                       (Mushtak-Lemire). 19 digits is the most that fits exactly in a
+                       uint64 (max 19-digit ~1.0e19 < UINT64_MAX ~1.8e19); this pulls
+                       full-double-precision data (e.g. citylots coordinates) off the
+                       slow strtod fallback — the stdlib json gem still strtods it.
+     >19 digits / overflow / extreme exponent -> strtod (round-to-odd). */
+  if (!overflow && m10digits >= 1 && m10digits <= 19 && (long)m10digits + e10 >= -307) {
     if (m10 == 0) return rb_float_new(neg ? -0.0 : 0.0);
     d = fj_eisel_lemire_s2d(e10, m10, neg);
   } else {
@@ -683,7 +684,7 @@ static int fj_try_decimal(fj_state *st, const char *p, long n, VALUE *out) {
       for (;;) {
         while (i < n && p[i] >= '0' && p[i] <= '9') {
           had_leading_zero = 1;
-          if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(p[i] - '0'); m10digits++; }
+          if (m10digits < 19) { m10 = m10 * 10 + (uint64_t)(p[i] - '0'); m10digits++; }
           else overflow = 1;
           i++;
         }
@@ -695,7 +696,7 @@ static int fj_try_decimal(fj_state *st, const char *p, long n, VALUE *out) {
     has_digit = 1;
     for (;;) {
       while (i < n && p[i] >= '0' && p[i] <= '9') {
-        if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(p[i] - '0'); m10digits++; }
+        if (m10digits < 19) { m10 = m10 * 10 + (uint64_t)(p[i] - '0'); m10digits++; }
         else overflow = 1;
         i++;
       }
@@ -710,7 +711,7 @@ static int fj_try_decimal(fj_state *st, const char *p, long n, VALUE *out) {
     for (;;) {
       while (i < n && p[i] >= '0' && p[i] <= '9') {
         has_digit = 1;
-        if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(p[i] - '0'); m10digits++; frac++; }
+        if (m10digits < 19) { m10 = m10 * 10 + (uint64_t)(p[i] - '0'); m10digits++; frac++; }
         else overflow = 1;
         i++;
       }
@@ -774,7 +775,7 @@ static VALUE fj_parse_number(fj_state *st) {
   long   nlen;
   int    is_float = 0, neg = 0, overflow = 0, has_sign = 0, had_leading_zero = 0;
   uint64_t m10 = 0;                 /* mantissa: integer + fraction digits */
-  int    m10digits = 0;             /* mantissa digit chars (caps the Eisel-Lemire fast path at 18) */
+  int    m10digits = 0;             /* mantissa digit chars (caps the Eisel-Lemire fast path at 19) */
   int    frac = 0;                  /* fraction digit chars: e10 -= frac */
   int64_t e10 = 0;
 
@@ -810,7 +811,7 @@ static VALUE fj_parse_number(fj_state *st) {
       for (;;) {
         while (*p >= '0' && *p <= '9') {
           had_leading_zero = 1;
-          if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; }
+          if (m10digits < 19) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; }
           else overflow = 1;
           p++;
         }
@@ -821,7 +822,7 @@ static VALUE fj_parse_number(fj_state *st) {
   } else if (*p >= '1' && *p <= '9') {
     for (;;) {
       while (*p >= '0' && *p <= '9') {
-        if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; }
+        if (m10digits < 19) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; }
         else overflow = 1;
         p++;
       }
@@ -841,7 +842,7 @@ static VALUE fj_parse_number(fj_state *st) {
     p++;
     for (;;) {
       while (*p >= '0' && *p <= '9') {
-        if (m10digits < 18) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; frac++; }
+        if (m10digits < 19) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; frac++; }
         else overflow = 1;
         p++;
       }
@@ -1245,7 +1246,7 @@ static int fj_try_member_number(fj_state *st, VALUE *out) {
   } else if (*p >= '1' && *p <= '9') {
     for (;;) {
       while (*p >= '0' && *p <= '9') {
-        if (FJ_LIKELY(m10digits < 18)) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; }
+        if (FJ_LIKELY(m10digits < 19)) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; }
         else overflow = 1;
         p++;
       }
@@ -1259,7 +1260,7 @@ static int fj_try_member_number(fj_state *st, VALUE *out) {
     is_float = 1; p++;
     for (;;) {
       while (*p >= '0' && *p <= '9') {
-        if (FJ_LIKELY(m10digits < 18)) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; frac++; }
+        if (FJ_LIKELY(m10digits < 19)) { m10 = m10 * 10 + (uint64_t)(*p - '0'); m10digits++; frac++; }
         else overflow = 1;
         p++;
       }
