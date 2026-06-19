@@ -130,10 +130,10 @@ SmarterJSON.process_file("config.json5")            # read a file, then process
 
 ## Usage in APIs
 
-At an API boundary the JSON comes from someone you don't control — a client POSTing a request body to *your* service, or an upstream service answering a call *you* made — and it isn't always clean: a stray trailing comma, a `NaN`, a payload wrapped in prose, or a quiet change to the format. A strict parser turns any of those into an exception (a request you reject, or a failed call chain). SmarterJSON extracts the data that's there instead, so one formatting quirk doesn't sink the whole request:
+At an API boundary the JSON comes from someone you don't control — a client sending a request body to *your* service, or an upstream service answering a call *you* made — and it isn't always clean: a stray trailing comma, a `NaN`, a payload wrapped in prose, or a quiet change to the format. A strict parser turns any of those into an exception (a request you reject, or a failed call chain). SmarterJSON extracts the data that's there instead, so one formatting quirk doesn't sink the whole request:
 
 ```ruby
-# Inbound — JSON a caller sent to your endpoint:
+# Inbound — JSON a caller sent to your service:
 data = SmarterJSON.process(request.body)
 
 # Outbound — JSON from a service you called:
