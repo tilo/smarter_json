@@ -41,9 +41,12 @@ module SmarterJSON
 
   # SmarterJSON.process_file(path, options = {}) — open a file and process it.
   #
-  # The :encoding option labels the file's encoding (default "UTF-8"); it does NOT
-  # trigger a transcoding pass — the parser works on the bytes in their native
-  # encoding and emits string values with the same encoding tag. With a block,
+  # The :encoding option labels the file's encoding (default "UTF-8"). SmarterJSON
+  # never normalizes the input to a different encoding on its own (we are not
+  # Python) — it parses the bytes in whatever encoding they arrive in and emits
+  # string values with that same encoding tag. The caller is free to transcode the
+  # input themselves (e.g. open the file with a "r:ext:int" mode); however the bytes
+  # arrive, we parse them and preserve their encoding. With a block,
   # streams document-by-document straight from disk in bounded memory (never
   # loading the whole file); the documents are read as newline-delimited
   # (NDJSON / JSONL), one per line.

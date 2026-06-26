@@ -1357,6 +1357,125 @@ second"', acceleration: acceleration)).to eq("firstsecond")
           expect(SmarterJSON.process(input, acceleration: acceleration).first["name"].encoding).to eq(Encoding::ISO_8859_1)
         end
 
+        # 1.2.3 bug fixes — encodings today's byte-scanner mis-handles. Each must parse
+        # correctly and PRESERVE the input's encoding in output strings; we never transcode
+        # the input to UTF-8 (Ruby, not Python). Inputs are built with #encode(target), so
+        # they cover both "input arrives in this encoding" and "someone transcoded TO it".
+        describe "encodings the byte-scanner must handle (UTF-16 / UTF-32 / Shift_JIS)" do
+          it "parses UTF-16LE input, preserving the input encoding in keys and values" do
+            input = '{"name":"café"}'.encode("UTF-16LE")
+            result = SmarterJSON.process_one(input, acceleration: acceleration)
+            expect(result.keys.first.encode("UTF-8")).to eq("name")
+            expect(result.values.first.encode("UTF-8")).to eq("café")
+            expect(result.keys.first.encoding).to eq(input.encoding)
+            expect(result.values.first.encoding).to eq(input.encoding)
+          end
+
+          it "parses UTF-16LE structural and numeric content" do
+            input = '{"a":1,"b":[true,null]}'.encode("UTF-16LE")
+            result = SmarterJSON.process_one(input, acceleration: acceleration)
+            expect(result.transform_keys { |k| k.encode("UTF-8") }).to eq({ "a" => 1, "b" => [true, nil] })
+            expect(result.keys.first.encoding).to eq(input.encoding)
+          end
+
+          it "parses UTF-16BE input, preserving the input encoding" do
+            input = '{"a":"x"}'.encode("UTF-16BE")
+            result = SmarterJSON.process_one(input, acceleration: acceleration)
+            expect(result.values.first.encode("UTF-8")).to eq("x")
+            expect(result.values.first.encoding).to eq(input.encoding)
+          end
+
+          it "parses UTF-32LE input, preserving the input encoding" do
+            input = '{"a":"x"}'.encode("UTF-32LE")
+            result = SmarterJSON.process_one(input, acceleration: acceleration)
+            expect(result.values.first.encode("UTF-8")).to eq("x")
+            expect(result.values.first.encoding).to eq(input.encoding)
+          end
+
+          it "parses Shift_JIS string content with a 0x5C trail byte (ソ = 83 5C), preserving the input encoding" do
+            input = '{"k":"ソ"}'.encode("Shift_JIS")
+            result = SmarterJSON.process_one(input, acceleration: acceleration)
+            expect(result.values.first.encode("UTF-8")).to eq("ソ")
+            expect(result.values.first.encoding).to eq(input.encoding)
+          end
+
+          it "parses Shift_JIS string content with a 0x5C trail byte (表 = 95 5C), preserving the input encoding" do
+            input = '{"k":"表"}'.encode("Shift_JIS")
+            result = SmarterJSON.process_one(input, acceleration: acceleration)
+            expect(result.values.first.encode("UTF-8")).to eq("表")
+            expect(result.values.first.encoding).to eq(input.encoding)
+          end
+        end
+
+        # File input: parse correctly and PRESERVE whatever encoding the bytes arrive in.
+        # Covers a raw file already in a problematic encoding, AND the caller opening the
+        # file WITH TRANSCODING to a problematic encoding (UTF-16 / UTF-32 / Shift_JIS).
+        # These go through the whole-buffer read path (File.read / read), which actually
+        # transcodes; the streaming Framer's readpartial does NOT honor the IO encoding and
+        # is tracked separately. Fixtures all hold {"k":"ソ"} (ソ = 83 5C in Shift_JIS).
+        describe "file / IO input + open-with-transcoding (preserve the arriving encoding)" do
+          let(:utf8_file)    { File.join(fixtures_dir, "encoding_utf8.json") }    # {"k":"ソ"} UTF-8
+          let(:utf16le_file) { File.join(fixtures_dir, "encoding_utf16le.json") } # {"k":"ソ"} UTF-16LE
+          let(:sjis_file)    { File.join(fixtures_dir, "encoding_sjis.json") }    # {"k":"ソ"} Shift_JIS
+
+          # raw file already in a problematic encoding (process_file :encoding label)
+          it "raw UTF-16LE file preserves UTF-16LE" do
+            result = SmarterJSON.process_file(utf16le_file, encoding: "UTF-16LE", acceleration: acceleration)
+            expect(result.first.values.first.encode("UTF-8")).to eq("ソ")
+            expect(result.first.values.first.encoding).to eq(Encoding.find("UTF-16LE"))
+          end
+
+          it "raw Shift_JIS file (ソ = 83 5C) preserves Shift_JIS" do
+            result = SmarterJSON.process_file(sjis_file, encoding: "Shift_JIS", acceleration: acceleration)
+            expect(result.first.values.first.encode("UTF-8")).to eq("ソ")
+            expect(result.first.values.first.encoding).to eq(Encoding.find("Shift_JIS"))
+          end
+
+          # caller OPENS the file WITH TRANSCODING and hands the IO straight to SmarterJSON,
+          # exactly as a user would. process(io) without a block reads the whole stream via
+          # io.read (which honors the transcoding); output must preserve the IO's encoding.
+          it "open-with-transcoding TO UTF-16LE preserves UTF-16LE" do
+            File.open(utf8_file, "r:UTF-8:UTF-16LE") do |io|
+              result = SmarterJSON.process(io, acceleration: acceleration)
+              expect(result.first.values.first.encode("UTF-8")).to eq("ソ")
+              expect(result.first.values.first.encoding).to eq(Encoding.find("UTF-16LE"))
+            end
+          end
+
+          it "open-with-transcoding TO UTF-32LE preserves UTF-32LE" do
+            File.open(utf8_file, "r:UTF-8:UTF-32LE") do |io|
+              result = SmarterJSON.process(io, acceleration: acceleration)
+              expect(result.first.values.first.encode("UTF-8")).to eq("ソ")
+              expect(result.first.values.first.encoding).to eq(Encoding.find("UTF-32LE"))
+            end
+          end
+
+          it "open-with-transcoding TO Shift_JIS (ソ -> 83 5C) preserves Shift_JIS" do
+            File.open(utf8_file, "r:UTF-8:Shift_JIS") do |io|
+              result = SmarterJSON.process(io, acceleration: acceleration)
+              expect(result.first.values.first.encode("UTF-8")).to eq("ソ")
+              expect(result.first.values.first.encoding).to eq(Encoding.find("Shift_JIS"))
+            end
+          end
+
+          # transcode-on-open via the :encoding option's "ext:int" form: File.read transcodes,
+          # but the option string is then reused downstream as a force_encoding label.
+          it "process_file(encoding: 'UTF-8:UTF-16LE') transcodes on open and preserves UTF-16LE" do
+            result = SmarterJSON.process_file(utf8_file, encoding: "UTF-8:UTF-16LE", acceleration: acceleration)
+            expect(result.first.values.first.encode("UTF-8")).to eq("ソ")
+            expect(result.first.values.first.encoding).to eq(Encoding.find("UTF-16LE"))
+          end
+
+          # green: transcode FROM a problematic encoding TO UTF-8 — arrives as UTF-8, we keep it.
+          it "open-with-transcoding FROM UTF-16LE to UTF-8 arrives as UTF-8 (green)" do
+            File.open(utf16le_file, "r:UTF-16LE:UTF-8") do |io|
+              result = SmarterJSON.process(io, acceleration: acceleration)
+              expect(result.first.values.first).to eq("ソ")
+              expect(result.first.values.first.encoding).to eq(Encoding::UTF_8)
+            end
+          end
+        end
+
         describe "default encoding — ASCII-8BIT input treated as UTF-8 (the HTTP-body case)" do
           it "relabels a valid-UTF-8 body tagged ASCII-8BIT to UTF-8, so equality works" do
             # How Net::HTTP and many HTTP libraries hand you response.body: correct
