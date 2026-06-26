@@ -13,9 +13,18 @@
 > ⚠️ We discourage the use of `process(input).first` / `process(input)[0]` because it silently drops potential additional documents
 >    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads, because it emits on_warning if it finds multiple docs.
 
-## 1.2.2 (unreleased)
+## 1.2.3 (unreleased)
 
-RSpec tests: 1,167
+RSpec tests: 1,167 → 1,205
+
+- Input in a non-UTF-8 encoding now parses correctly and keeps its **own** encoding in the result — SmarterJSON never transcodes it to UTF-8 on your behalf:
+  - **UTF-16 / UTF-32** and **Shift_JIS** (and other CJK double-byte encodings such as Big5 / GBK / GB18030) previously raised or mis-parsed; they now parse, with string values tagged in the input's encoding.
+  - Applies to String, file (`process_file`), and IO / streaming (`foreach`) input — including a file the caller opened with transcoding (e.g. `File.open(path, "r:UTF-8:UTF-16LE")`), where the output is the encoding the bytes arrive in.
+  - Streaming a **Latin-1 / Windows-1252** (or other single-byte) file or IO now preserves that encoding too, instead of mislabelling or raising.
+
+## 1.2.2 (2026-06-19)
+
+RSpec tests: 1,165 → 1,167
 
 - The Eisel-Lemire fast path for `decimal_precision: :float` now covers decimals with **up to 19 significant digits** (was 18). 19 digits is the most that fits exactly in a `uint64` (max 19-digit ≈ 1.0e19 < `UINT64_MAX` ≈ 1.8e19), so these no longer fall back to the slower `strtod`. Still correctly rounded, bit-for-bit identical to the stdlib — verified across 18/19-digit round-to-even tie shapes.
 
