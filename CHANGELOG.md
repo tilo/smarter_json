@@ -17,7 +17,7 @@
 
 RSpec tests: 1,167 → 1,205
 
-- Input in a non-UTF-8 encoding now parses correctly and keeps its **own** encoding in the result — SmarterJSON never transcodes it to UTF-8 on your behalf:
+Fixing some encoding corner cases:
   - **UTF-16 / UTF-32** and **Shift_JIS** (and other CJK double-byte encodings such as Big5 / GBK / GB18030) previously raised or mis-parsed; they now parse, with string values tagged in the input's encoding.
   - Applies to String, file (`process_file`), and IO / streaming (`foreach`) input — including a file the caller opened with transcoding (e.g. `File.open(path, "r:UTF-8:UTF-16LE")`), where the output is the encoding the bytes arrive in.
   - Streaming a **Latin-1 / Windows-1252** (or other single-byte) file or IO now preserves that encoding too, instead of mislabelling or raising.
