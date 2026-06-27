@@ -15,7 +15,7 @@
 
 ## 1.2.3 (2026-06-26)
 
-RSpec tests: 1,167 → 1,205
+RSpec tests: 1,167 → 1,219
 
 Fixing some encoding corner cases:
   - **UTF-16 / UTF-32** and **Shift_JIS** (and other CJK double-byte encodings such as Big5 / GBK / GB18030) previously raised or mis-parsed; they now parse, with string values tagged in the input's encoding.
