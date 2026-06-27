@@ -1537,13 +1537,26 @@ second"', acceleration: acceleration)).to eq("firstsecond")
         # representable in the target encoding, deep nesting (depth-safety), BOM handling,
         # invalid bytes, denylist variants, and the file read-mode scoping.
         describe "encoding corner cases (1.2.3 hardening)" do
-          it "keeps a non-representable \\u-escaped char as UTF-8 instead of raising (Shift_JIS)" do
+          it "replaces a non-representable \\u-escaped char (default '?') instead of raising (Shift_JIS)" do
             # valid Shift_JIS input (all ASCII bytes); the escape decodes to an emoji not in Shift_JIS
             json = "{\"k\":\"\\uD83D\\uDE00\"}".dup.force_encoding("Shift_JIS")
             result = SmarterJSON.process_one(json, acceleration: acceleration)
-            expect(result.values.first).to eq("😀")
-            expect(result.values.first.encoding).to eq(Encoding::UTF_8) # not representable in SJIS -> kept UTF-8
-            expect(result.keys.first.encoding).to eq(Encoding.find("Shift_JIS")) # representable key still SJIS
+            expect(result.values.first.encode("UTF-8")).to eq("?") # emoji -> ? (default replacement), no raise
+            expect(result.values.first.encoding).to eq(Encoding.find("Shift_JIS")) # uniform encoding, no mixing
+          end
+
+          it "honors the replace_char: option for non-representable chars" do
+            json = "{\"k\":\"\\uD83D\\uDE00\"}".dup.force_encoding("Shift_JIS")
+            custom = SmarterJSON.process_one(json, replace_char: "_", acceleration: acceleration)
+            expect(custom.values.first.encode("UTF-8")).to eq("_")
+            expect(custom.values.first.encoding).to eq(Encoding.find("Shift_JIS"))
+
+            dropped = SmarterJSON.process_one(json, replace_char: "", acceleration: acceleration)
+            expect(dropped.values.first.encode("UTF-8")).to eq("") # "" drops the char
+          end
+
+          it "rejects a non-String replace_char: option" do
+            expect { SmarterJSON.process_one('{}', replace_char: 5, acceleration: acceleration) }.to raise_error(ArgumentError, /replace_char must be a String/)
           end
 
           it "re-encodes deeply nested UTF-16 without SystemStackError (depth-safe)" do

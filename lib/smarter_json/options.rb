@@ -12,6 +12,7 @@ module SmarterJSON
       duplicate_key: :last_wins, # :last_wins | :first_wins  (repeats are also reported via on_warning)
       decimal_precision: :auto,  # :auto | :float | :bigdecimal  (Oj-compatible decimal handling)
       on_warning: nil,           # a callable invoked once per non-fatal lenient fix (a SmarterJSON::Warning)
+      replace_char: "?",         # replacement for a char not representable in the input's encoding (undef: :replace); "" drops it
     }.freeze
 
     module_function
@@ -55,6 +56,9 @@ module SmarterJSON
       encoding = options[:encoding]
       unless encoding.nil? || encoding.is_a?(String)
         errors << "encoding must be nil or a String (got #{encoding.class})"
+      end
+      unless options[:replace_char].is_a?(String)
+        errors << "replace_char must be a String (got #{options[:replace_char].class})"
       end
 
       raise ArgumentError, "SmarterJSON: invalid options — #{errors.join('; ')}" if errors.any?

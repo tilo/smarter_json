@@ -44,6 +44,7 @@ RSpec.describe SmarterJSON::Options do
       duplicate_key: { valid: %i[last_wins first_wins], invalid: [:raise, "last_wins", nil] },
       encoding: { valid: [nil, "UTF-8", "ASCII-8BIT"], invalid: [123, :utf8] },
       on_warning: { valid: [nil, ->(w) { w }], invalid: ["nope", 42] },
+      replace_char: { valid: ["?", "", "_", "??"], invalid: [nil, 1, :q] },
     }
     label = ->(v) { v.is_a?(Proc) ? "a callable" : v.inspect }
 

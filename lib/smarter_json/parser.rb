@@ -237,21 +237,21 @@ module SmarterJSON
   end
 
   # Re-tag one scalar into `enc`. A character not representable in `enc` (e.g. an emoji from a
-  # `\u` escape inside a Shift_JIS document) keeps its UTF-8 value — lossless, never raises.
-  def reencode_scalar(obj, enc)
+  # `\u` escape inside a Shift_JIS document) is replaced by `replace` (the :replace_char option,
+  # default "?") — uniform encoding, never raises. (`invalid:` can't trigger here: the value
+  # came from a valid UTF-8 parse.)
+  def reencode_scalar(obj, enc, replace)
     return obj unless obj.is_a?(String)
 
-    obj.encode(enc)
-  rescue Encoding::UndefinedConversionError
-    obj
+    obj.encode(enc, invalid: :replace, undef: :replace, replace: replace)
   end
 
   # Re-tag a parsed value's strings (Hash keys/values, Array elements, nested) into `enc`,
   # so we emit values in the encoding the bytes arrived in after parsing a UTF-8 copy.
   # ITERATIVE (an explicit work stack, not recursion) so a deeply nested document is
   # depth-safe — like the parser itself — and can't raise SystemStackError.
-  def deep_encode(root, enc)
-    return reencode_scalar(root, enc) unless root.is_a?(Array) || root.is_a?(Hash)
+  def deep_encode(root, enc, replace)
+    return reencode_scalar(root, enc, replace) unless root.is_a?(Array) || root.is_a?(Hash)
 
     out = root.is_a?(Array) ? [] : {}
     stack = [[root, out]]
@@ -260,14 +260,14 @@ module SmarterJSON
       if src.is_a?(Array)
         src.each do |v|
           child = (v.is_a?(Array) ? [] : {}) if v.is_a?(Array) || v.is_a?(Hash)
-          dst << (child || reencode_scalar(v, enc))
+          dst << (child || reencode_scalar(v, enc, replace))
           stack.push([v, child]) if child
         end
       else
         src.each do |k, v|
-          key = reencode_scalar(k, enc)
+          key = reencode_scalar(k, enc, replace)
           child = (v.is_a?(Array) ? [] : {}) if v.is_a?(Array) || v.is_a?(Hash)
-          dst[key] = child || reencode_scalar(v, enc)
+          dst[key] = child || reencode_scalar(v, enc, replace)
           stack.push([v, child]) if child
         end
       end
@@ -319,7 +319,10 @@ module SmarterJSON
     end
   end
 
-  private_class_method :process_content, :stream_io, :warn_extra_documents
+  private_class_method :process_content, :stream_io, :warn_extra_documents,
+                       :file_read_mode, :normalize_default_encoding, :unscannable_enc?,
+                       :unscannable_encoding, :concrete_unicode_encoding, :to_utf8_copy,
+                       :reencode_scalar, :deep_encode
 
   # Named byte values, shared by the Parser FSM and the Framer / Recovery byte
   # scanners so none of them spell out raw hex. Included where needed.
@@ -601,11 +604,12 @@ module SmarterJSON
         target_enc = SmarterJSON.send(:concrete_unicode_encoding, input, target_enc) # avoid per-string BOMs
         opts = options.merge(encoding: nil) # the working copy is UTF-8; don't re-label it downstream
         utf8 = SmarterJSON.send(:to_utf8_copy, input) # invalid bytes -> SmarterJSON::EncodingError
+        replace = options[:replace_char]
         if block
-          return process_string(utf8, opts) { |doc| block.call(SmarterJSON.send(:deep_encode, doc, target_enc)) }
+          return process_string(utf8, opts) { |doc| block.call(SmarterJSON.send(:deep_encode, doc, target_enc, replace)) }
         end
 
-        return process_string(utf8, opts).map { |doc| SmarterJSON.send(:deep_encode, doc, target_enc) }
+        return process_string(utf8, opts).map { |doc| SmarterJSON.send(:deep_encode, doc, target_enc, replace) }
       end
 
       return SmarterJSON.send(:process_content, input, options, &block) unless input.valid_encoding?
