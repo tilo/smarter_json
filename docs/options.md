@@ -22,6 +22,7 @@ These options are passed to [`SmarterJSON.process`](./basic_read_api.md), `Smart
 | `:duplicate_key`  | `:last_wins` | How to handle a key that repeats within one object: `:last_wins` or `:first_wins`. (Every repeat is also reported through `:on_warning` — see below.)                          |
 | `:encoding`       | `nil`        | Labels the input's encoding (e.g. `"UTF-8"`). It does **not** trigger a transcoding pass — see below.                  |
 | `:on_warning`     | `nil`        | A callable invoked once per lenient fix applied, passed a `SmarterJSON::Warning`. Never changes the return value. See below. |
+| `:replace_char`   | `"?"`        | Replacement for a character a `\uXXXX` escape decodes to that the input's encoding can't represent (e.g. an emoji inside Shift_JIS). `""` drops it. See below. |
 | `:symbolize_keys` | `false`      | Return object keys as Symbols instead of Strings.                                                                      |
 
 ```ruby
@@ -47,7 +48,11 @@ The warning types are `:empty_slot` (a collapsed empty comma slot, e.g. `[1,,2]`
 
 ### A note on `:encoding`
 
-`:encoding` labels what the input *is* — it does not transcode. With the default `nil`, SmarterJSON keeps the input's own encoding tag and emits string values with that tag, the same way `smarter_csv` handles encodings — **with one smart default:** input tagged `ASCII-8BIT` (BINARY) that is valid UTF-8 is treated as UTF-8. This is how `Net::HTTP` returns a `response.body`; without it, those string values would compare unequal to UTF-8 literals. `ASCII-8BIT` input that is *not* valid UTF-8 raises `SmarterJSON::EncodingError` — pass an explicit `:encoding` (e.g. `"ISO-8859-1"`) for genuinely-legacy bytes. Bytes invalid for an explicitly claimed encoding also raise `SmarterJSON::EncodingError` (a kind of `SmarterJSON::ParseError`). A UTF-8 BOM is handled automatically; UTF-16 / UTF-32 input is out of scope.
+`:encoding` labels what the input *is* — it does not transcode. With the default `nil`, SmarterJSON keeps the input's own encoding tag and emits string values with that tag, the same way `smarter_csv` handles encodings — **with one smart default:** input tagged `ASCII-8BIT` (BINARY) that is valid UTF-8 is treated as UTF-8. This is how `Net::HTTP` returns a `response.body`; without it, those string values would compare unequal to UTF-8 literals. `ASCII-8BIT` input that is *not* valid UTF-8 raises `SmarterJSON::EncodingError` — pass an explicit `:encoding` (e.g. `"ISO-8859-1"`) for genuinely-legacy bytes. Bytes invalid for an explicitly claimed encoding also raise `SmarterJSON::EncodingError` (a kind of `SmarterJSON::ParseError`). A UTF-8 BOM is handled automatically. UTF-16 / UTF-32, Shift_JIS, and other CJK double-byte encodings are now supported as well: the document parses and string values come back tagged in the input's own encoding (a UTF-16 / UTF-32 BOM is consumed on the way in). The one wrinkle — a `\uXXXX` escape that decodes to a character the input's encoding can't represent — is handled by `:replace_char` (above).
+
+### A note on `:replace_char`
+
+For an input in an encoding that can't be byte-scanned directly (UTF-16 / UTF-32, Shift_JIS, and other CJK double-byte encodings), SmarterJSON parses a UTF-8 copy and re-tags the result back into the input's encoding, so you get values in the encoding the bytes arrived in. A `\uXXXX` escape can decode to a character that encoding can't represent — e.g. an emoji inside a Shift_JIS document. Rather than raise, that single character is replaced by `:replace_char` (default `"?"`). Set `replace_char: ""` to drop it, or pass any string your target encoding can hold (e.g. the geta mark `"〓"` for Shift_JIS). It applies only on this transcode-and-re-tag path; for plain UTF-8 / single-byte input it never comes into play.
 
 ### A note on `:decimal_precision`
 

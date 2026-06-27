@@ -35,6 +35,14 @@ jobs:
           - "3.4"
           - "4.0"
           - head
+        # Windows: one OS is enough to catch the platform-specific corner cases (newline
+        # translation, encoding defaults, file read modes). A couple of modern Rubies — not
+        # the whole grid: old Rubies on Windows have flaky toolchains and add little signal.
+        include:
+          - os: windows
+            ruby: "3.3"
+          - os: windows
+            ruby: "3.4"
 
     steps:
       - uses: actions/checkout@v6
