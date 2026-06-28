@@ -280,25 +280,47 @@ module SmarterJSON
   def stream_io(io, options, &block)
     ext = io.respond_to?(:external_encoding) ? io.external_encoding : nil
     int = io.respond_to?(:internal_encoding) ? io.internal_encoding : nil
-    logical = int || ext # what io.read would hand back — the encoding the bytes arrive in
+    out_enc = int || ext # the encoding the caller expects in the output
+    source  = ext        # the encoding readpartial's raw bytes are actually in
 
     # The Framer reads via readpartial, which returns ASCII-8BIT — it drops the IO's encoding
-    # and ignores transcoding. When that matters (a transcoding IO, or a logical encoding we
-    # can't byte-scan: UTF-16 / UTF-32 / Shift_JIS / ...), read the whole stream via io.read
-    # (which honors both) and parse it as a unit; the whole-buffer path preserves the encoding.
-    if int || (logical && SmarterJSON.send(:unscannable_enc?, logical))
-      return process(io.read, options, &block)
+    # and ignores transcoding. When the byte-scanner can't frame the raw bytes directly — they
+    # are in an unscannable encoding (UTF-16 / UTF-32 / Shift_JIS / ...), or the IO transcodes
+    # (the wanted output encoding differs from the on-wire bytes) — transcode each chunk to a
+    # UTF-8 view, frame documents there one at a time, and emit each in `out_enc`. Bounded
+    # memory: only one document is buffered, never the whole stream.
+    if source && out_enc && (unscannable_enc?(source) || out_enc != source)
+      return stream_transcoded(io, source, out_enc, options, &block)
     end
 
     count = 0
     Framer.each_document(io) do |doc|
       # readpartial dropped the IO's encoding tag; restore it so a Latin-1 / Windows-1252 /
       # etc. stream is parsed and emitted in its own encoding, not mislabelled.
-      doc = doc.dup.force_encoding(logical) if logical && doc.encoding != logical
+      doc = doc.dup.force_encoding(out_enc) if out_enc && doc.encoding != out_enc
       # Recovery.process_string yields each value and returns how many it yielded;
       # blank / comment-only framed segments yield none, so count tracks actual
       # documents (== values yielded), not raw framed segments.
       count += Recovery.process_string(doc, options, &block)
+    end
+    count
+  end
+
+  # Bounded-memory streaming for an unscannable or transcoding IO (see stream_io). Each chunk
+  # is transcoded to a UTF-8 view and framed there one document at a time; each framed document
+  # is parsed and emitted in `out_enc` — the same parse-then-re-tag path as the whole-buffer
+  # case, but per document, so peak memory is bounded by one document, not the whole stream.
+  def stream_transcoded(io, source, out_enc, options, &block)
+    first   = Framer.read_chunk(io)
+    out_enc = concrete_unicode_encoding(first.to_s, out_enc) # generic UTF-16/32 -> concrete via BOM
+    # No converter when the raw bytes are already UTF-8 (e.g. a UTF-8 -> UTF-16 transcoding IO):
+    # the bytes need no transcoding to be byte-scanned, only the OUTPUT is re-tagged (deep_encode).
+    conv    = [Encoding::UTF_8, Encoding::US_ASCII].include?(source) ? nil : Encoding::Converter.new(source, Encoding::UTF_8)
+    opts    = options.merge(encoding: nil)
+    replace = options[:replace_char]
+    count   = 0
+    Framer.each_document_transcoded(io, conv, first) do |utf8_doc|
+      count += Recovery.process_string(utf8_doc, opts) { |v| block.call(deep_encode(v, out_enc, replace)) }
     end
     count
   end
@@ -319,7 +341,7 @@ module SmarterJSON
     end
   end
 
-  private_class_method :process_content, :stream_io, :warn_extra_documents,
+  private_class_method :process_content, :stream_io, :stream_transcoded, :warn_extra_documents,
                        :file_read_mode, :normalize_default_encoding, :unscannable_enc?,
                        :unscannable_encoding, :concrete_unicode_encoding, :to_utf8_copy,
                        :reencode_scalar, :deep_encode
@@ -389,6 +411,59 @@ module SmarterJSON
       end
 
       yield buffer unless separators_only?(buffer)
+    end
+
+    # Like each_document, but the IO's raw bytes are in `conv`'s source encoding (UTF-16 /
+    # UTF-32 / Shift_JIS / ...): each chunk is transcoded to a UTF-8 view and framed there, so
+    # the byte-level splitter works. `first_chunk` is the already-read first raw chunk (the
+    # caller sniffs a BOM from it). Memory stays bounded by one document, like each_document.
+    def each_document_transcoded(io, conv, first_chunk)
+      buffer = +""
+      scan = 0
+      doc_start = nil
+      stack = []
+      mode = nil
+
+      raw = first_chunk
+      while raw
+        chunk = transcode_chunk(conv, raw)
+        unless chunk.empty?
+          buffer << chunk
+          loop do
+            emitted, buffer, scan, doc_start, stack, mode = scan_buffer(buffer, scan, doc_start, stack, mode)
+            break unless emitted
+
+            yield emitted
+          end
+        end
+        raw = read_chunk(io)
+      end
+
+      finish_transcode(conv) # truncated / invalid trailing bytes -> SmarterJSON::EncodingError
+
+      yield buffer unless separators_only?(buffer)
+    end
+
+    # Push one raw chunk through the converter, returning the UTF-8 produced so far. An
+    # incomplete trailing multibyte sequence is held inside the converter until the next chunk;
+    # invalid bytes raise SmarterJSON::EncodingError (matching the whole-buffer to_utf8_copy).
+    def transcode_chunk(conv, raw)
+      return raw.dup.force_encoding(Encoding::UTF_8) if conv.nil? # raw bytes are already UTF-8
+
+      out = +""
+      status = conv.primitive_convert(raw.dup, out, nil, nil, partial_input: true)
+      raise SmarterJSON::EncodingError, "invalid byte sequence in stream" if status == :invalid_byte_sequence
+
+      out
+    end
+
+    # Flush the converter at end of stream. A held incomplete multibyte sequence means the input
+    # was truncated mid-character — surface it the same way an invalid encoding is surfaced.
+    def finish_transcode(conv)
+      return if conv.nil?
+
+      status = conv.primitive_convert("".b, +"")
+      raise SmarterJSON::EncodingError, "invalid byte sequence in stream" unless status == :finished
     end
 
     def read_chunk(io)

@@ -1531,6 +1531,68 @@ second"', acceleration: acceleration)).to eq("firstsecond")
             expect(docs.first).to eq({ "k" => "x" })
             expect(docs.first.values.first.encoding).to eq(Encoding::UTF_8)
           end
+
+          it "streams every document of a multi-doc UTF-16LE NDJSON source, preserving UTF-16LE" do
+            io = StringIO.new(%({"a":1}\n{"b":2}\n{"c":3}\n).encode("UTF-16LE"))
+            docs = SmarterJSON.foreach(io, acceleration: acceleration).to_a
+            expect(docs.map { |d| d.transform_keys { |k| k.encode("UTF-8") } }).to eq([{ "a" => 1 }, { "b" => 2 }, { "c" => 3 }])
+            expect(docs.all? { |d| d.keys.first.encoding == Encoding.find("UTF-16LE") }).to be true
+          end
+
+          it "streams a UTF-16LE source in BOUNDED memory — does not read the whole input" do
+            # > CHUNK_SIZE (16 KiB) of UTF-16LE NDJSON, so a real chunked read is exercised
+            big = StringIO.new(%({"n":1}\n).encode("UTF-16LE") * 6_000)
+            first = SmarterJSON.foreach(big, acceleration: acceleration).first(1)
+            expect(first.first.values.first).to eq(1)
+            expect(first.first.keys.first.encoding).to eq(Encoding.find("UTF-16LE"))
+            expect(big.pos).to be < big.size # stopped after ~one chunk, didn't slurp the whole stream
+          end
+
+          # Every encoding the bounded-streaming path is meant to handle, each streamed through
+          # foreach(IO) and checked for correct value + preserved encoding.
+          {
+            "UTF-16LE" => "x", "UTF-16BE" => "x", "UTF-32LE" => "x", "UTF-32BE" => "x",
+            "Shift_JIS" => "ソ", "Windows-31J" => "ソ", "Big5" => "x", "GBK" => "x"
+          }.each do |enc_name, ch|
+            it "streams a #{enc_name} source via foreach(IO), preserving #{enc_name}" do
+              io = StringIO.new(%({"k":"#{ch}"}).encode(enc_name))
+              doc = SmarterJSON.foreach(io, acceleration: acceleration).to_a.first
+              expect(doc.values.first.encode("UTF-8")).to eq(ch)
+              expect(doc.values.first.encoding).to eq(Encoding.find(enc_name))
+            end
+          end
+
+          # Generic UTF-16 / UTF-32 (BOM-tagged) — output is BOM-free concrete endianness.
+          { "UTF-16" => [Encoding::UTF_16LE, Encoding::UTF_16BE], "UTF-32" => [Encoding::UTF_32LE, Encoding::UTF_32BE] }.each do |enc_name, concretes|
+            it "streams a generic #{enc_name} (BOM) source, emitting BOM-free concrete output" do
+              io = StringIO.new(%({"k":"x"}).encode(enc_name)) # #encode auto-prepends a BOM
+              doc = SmarterJSON.foreach(io, acceleration: acceleration).to_a.first
+              expect(doc.values.first.encode("UTF-8")).to eq("x")
+              expect(concretes).to include(doc.values.first.encoding)
+              expect(doc.values.first.bytes.first(2)).not_to eq([0xFE, 0xFF]) # no BOM in the value
+            end
+          end
+
+          # NEGATIVE: byte-scannable encodings must NOT route through the transcoding path.
+          it "marks only the right encodings as needing the transcoding path (routing predicate)" do
+            %w[UTF-8 US-ASCII ISO-8859-1 Windows-1252 EUC-JP].each do |e|
+              expect(SmarterJSON.send(:unscannable_enc?, Encoding.find(e))).to be(false), "#{e} should be byte-scannable"
+            end
+            %w[UTF-16LE UTF-16BE UTF-32LE UTF-32BE UTF-16 UTF-32 Shift_JIS Windows-31J Big5 GBK GB18030].each do |e|
+              expect(SmarterJSON.send(:unscannable_enc?, Encoding.find(e))).to be(true), "#{e} should need transcoding"
+            end
+          end
+
+          it "does NOT invoke stream_transcoded for a scannable stream (UTF-8 / Latin-1)" do
+            expect(SmarterJSON).not_to receive(:stream_transcoded)
+            SmarterJSON.foreach(StringIO.new('{"k":"x"}'), acceleration: acceleration).to_a
+            SmarterJSON.foreach(StringIO.new("{\"k\":\"caf\xE9\"}".b.force_encoding("ISO-8859-1")), acceleration: acceleration).to_a
+          end
+
+          it "DOES invoke stream_transcoded for an unscannable stream (UTF-16LE)" do
+            expect(SmarterJSON).to receive(:stream_transcoded).and_call_original
+            SmarterJSON.foreach(StringIO.new('{"k":"x"}'.encode("UTF-16LE")), acceleration: acceleration).to_a
+          end
         end
 
         # 1.2.3 hardening — corner cases of the transcode-and-re-tag path: a char not
