@@ -1405,6 +1405,31 @@ second"', acceleration: acceleration)).to eq("firstsecond")
             expect(result.values.first.encode("UTF-8")).to eq("表")
             expect(result.values.first.encoding).to eq(input.encoding)
           end
+
+          # process(unscannable_string) WITH A BLOCK takes the block branch of
+          # Recovery.process_string (parser.rb:684): each parsed document is deep_encode'd
+          # back to the input encoding and yielded. process_one / process WITHOUT a block
+          # take the .map branch (line 687) instead, so this is the only call that reaches 684.
+          it "yields each document in the input encoding when process is given a block (UTF-16LE)" do
+            input = %({"a":1}\n{"b":"x"}).encode("UTF-16LE")
+            yielded = []
+            SmarterJSON.process(input, acceleration: acceleration) { |doc| yielded << doc }
+            decoded = yielded.map do |doc|
+              doc.each_with_object({}) { |(k, v), h| h[k.encode("UTF-8")] = v.is_a?(String) ? v.encode("UTF-8") : v }
+            end
+            expect(decoded).to eq([{ "a" => 1 }, { "b" => "x" }])
+            expect(yielded.first.keys.first.encoding).to eq(input.encoding)
+            expect(yielded.last.values.first.encoding).to eq(input.encoding)
+          end
+
+          it "yields each document in the input encoding when process is given a block (Shift_JIS, ソ = 83 5C)" do
+            input = '{"k":"ソ"}'.encode("Shift_JIS")
+            yielded = []
+            SmarterJSON.process(input, acceleration: acceleration) { |doc| yielded << doc }
+            expect(yielded.length).to eq(1)
+            expect(yielded.first.values.first.encode("UTF-8")).to eq("ソ")
+            expect(yielded.first.values.first.encoding).to eq(input.encoding)
+          end
         end
 
         # File input: parse correctly and PRESERVE whatever encoding the bytes arrive in.
