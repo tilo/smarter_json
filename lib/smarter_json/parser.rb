@@ -41,20 +41,40 @@ module SmarterJSON
 
   # SmarterJSON.process_file(path, options = {}) — open a file and process it.
   #
-  # The :encoding option labels the file's encoding (default "UTF-8"); it does NOT
-  # trigger a transcoding pass — the parser works on the bytes in their native
-  # encoding and emits string values with the same encoding tag. With a block,
-  # streams document-by-document straight from disk in bounded memory (never
-  # loading the whole file); the documents are read as newline-delimited
-  # (NDJSON / JSONL), one per line.
+  # The :encoding option labels the file's encoding (default "UTF-8").
+  #
+  # The user can send any encoding to SmarterJSON - we make zero assumptions about encoding.
+  # We also do not "normalize" the input to a different encoding on our own (this is not Python).
+  #
+  # We parse the bytes in whatever encoding they arrive in and emit string values
+  # with that same encoding tag.
+  #
+  # The caller is free to transcode the input themselves (e.g. open the file with a "r:ext:int" mode);
+  # however the bytes arrive, we parse them and preserve their encoding. With a block,
+  # streams document-by-document straight from disk in bounded memory (neverloading the whole file);
+  # the documents are read as newline-delimited (NDJSON / JSONL), one per line.
+  #
   def process_file(path, options = {}, &block)
     options = Options.process_options(options)
     encoding = options[:encoding] || "UTF-8"
+    mode = file_read_mode(encoding)
     if block
-      File.open(path, "r:#{encoding}") { |io| stream_io(io, options, &block) }
+      File.open(path, mode) { |io| stream_io(io, options, &block) }
     else
-      process(File.read(path, encoding: encoding), options)
+      process(File.read(path, mode: mode), options)
     end
+  end
+
+  # Read mode for process_file. Binary mode is required for ASCII-incompatible encodings
+  # (UTF-16 / UTF-32) — text mode refuses them ("ASCII incompatible encoding needs binmode").
+  # ASCII-compatible encodings keep TEXT mode, so newline translation (e.g. \r\n on Windows)
+  # is unchanged — binmode only applies where text mode is impossible anyway.
+  def file_read_mode(encoding)
+    incompatible = encoding.to_s.split(":").any? do |name|
+      enc = Encoding.find(name) rescue nil
+      enc && !enc.ascii_compatible?
+    end
+    incompatible ? "rb:#{encoding}" : "r:#{encoding}"
   end
 
   # SmarterJSON.foreach(source, options = {}) — the streaming, composable sibling of
@@ -163,15 +183,144 @@ module SmarterJSON
     raise EncodingError, "input is tagged ASCII-8BIT and is not valid UTF-8 — pass encoding: to declare its encoding"
   end
 
+  # Legacy CJK double-byte encodings whose trail bytes can fall in the ASCII range, so a
+  # 0x5C trail byte looks like a string escape, a 0x7B like a brace, etc. — i.e. they are
+  # ascii_compatible? yet still NOT safe to byte-scan for JSON structure. (EUC-* and
+  # single-byte encodings keep their non-ASCII bytes above 0x7F, so they ARE safe.)
+  UNSCANNABLE_ASCII_COMPATIBLE = %w[
+    Shift_JIS Windows-31J MacJapanese SHIFT_JISX0213 SJIS-DoCoMo SJIS-KDDI SJIS-SoftBank
+    Big5 Big5-HKSCS Big5-UAO CP950 GBK GB18030 GB12345
+  ].each_with_object({}) do |name, h|
+    h[Encoding.find(name)] = true
+  rescue ArgumentError
+    # encoding not built into this Ruby — skip it
+  end.freeze
+
+  # True when an Encoding cannot be scanned directly for JSON structure — the non
+  # ASCII-compatible ones (UTF-16 / UTF-32, where structure is in code units) and the CJK
+  # double-byte ones above. For these we parse a UTF-8 copy and emit the values back in the
+  # original encoding. (Over-including a safe encoding only costs a transcode round-trip; the
+  # result is still correct.)
+  def unscannable_enc?(enc)
+    return true unless enc.ascii_compatible?
+
+    UNSCANNABLE_ASCII_COMPATIBLE.key?(enc)
+  end
+
+  # The encoding the bytes arrived in when they must be parsed via a UTF-8 copy (see
+  # unscannable_enc?); nil when the bytes are directly byte-scannable.
+  def unscannable_encoding(input)
+    enc = input.encoding
+    unscannable_enc?(enc) ? enc : nil
+  end
+
+  # Generic UTF-16 / UTF-32 prepend a byte-order mark to EVERY string when you encode TO them.
+  # Map the generic encoding to the concrete endianness (read from the input's own BOM) so the
+  # re-tagged values are BOM-free and usable. Concrete and non-Unicode encodings pass through.
+  def concrete_unicode_encoding(input, enc)
+    return enc unless enc == Encoding::UTF_16 || enc == Encoding::UTF_32
+
+    head = input.byteslice(0, 4).to_s.b
+    if enc == Encoding::UTF_16
+      head.start_with?("\xFF\xFE".b) ? Encoding::UTF_16LE : Encoding::UTF_16BE
+    else
+      head.start_with?("\xFF\xFE\x00\x00".b) ? Encoding::UTF_32LE : Encoding::UTF_32BE
+    end
+  end
+
+  # Transcode the input to a UTF-8 working copy for scanning. Invalid bytes raise the gem's
+  # own SmarterJSON::EncodingError (not a bare Ruby Encoding error), matching the rest.
+  def to_utf8_copy(input)
+    input.encode(Encoding::UTF_8)
+  rescue Encoding::UndefinedConversionError, Encoding::InvalidByteSequenceError
+    raise EncodingError, "invalid byte sequence for #{input.encoding.name}"
+  end
+
+  # Re-tag one scalar into `enc`. A character not representable in `enc` (e.g. an emoji from a
+  # `\u` escape inside a Shift_JIS document) is replaced by `replace` (the :replace_char option,
+  # default "?") — uniform encoding, never raises. (`invalid:` can't trigger here: the value
+  # came from a valid UTF-8 parse.)
+  def reencode_scalar(obj, enc, replace)
+    return obj unless obj.is_a?(String)
+
+    obj.encode(enc, invalid: :replace, undef: :replace, replace: replace)
+  end
+
+  # Re-tag a parsed value's strings (Hash keys/values, Array elements, nested) into `enc`,
+  # so we emit values in the encoding the bytes arrived in after parsing a UTF-8 copy.
+  # ITERATIVE (an explicit work stack, not recursion) so a deeply nested document is
+  # depth-safe — like the parser itself — and can't raise SystemStackError.
+  def deep_encode(root, enc, replace)
+    return reencode_scalar(root, enc, replace) unless root.is_a?(Array) || root.is_a?(Hash)
+
+    out = root.is_a?(Array) ? [] : {}
+    stack = [[root, out]]
+    until stack.empty?
+      src, dst = stack.pop
+      if src.is_a?(Array)
+        src.each do |v|
+          child = (v.is_a?(Array) ? [] : {}) if v.is_a?(Array) || v.is_a?(Hash)
+          dst << (child || reencode_scalar(v, enc, replace))
+          stack.push([v, child]) if child
+        end
+      else
+        src.each do |k, v|
+          key = reencode_scalar(k, enc, replace)
+          child = (v.is_a?(Array) ? [] : {}) if v.is_a?(Array) || v.is_a?(Hash)
+          dst[key] = child || reencode_scalar(v, enc, replace)
+          stack.push([v, child]) if child
+        end
+      end
+    end
+    out
+  end
+
   # Stream documents from an IO incrementally, yielding each recovered top-level
   # document without slurping the whole input into memory first.
   def stream_io(io, options, &block)
+    ext = io.respond_to?(:external_encoding) ? io.external_encoding : nil
+    int = io.respond_to?(:internal_encoding) ? io.internal_encoding : nil
+    out_enc = int || ext # the encoding the caller expects in the output
+    source  = ext        # the encoding readpartial's raw bytes are actually in
+
+    # The Framer reads via readpartial, which returns ASCII-8BIT — it drops the IO's encoding
+    # and ignores transcoding. When the byte-scanner can't frame the raw bytes directly — they
+    # are in an unscannable encoding (UTF-16 / UTF-32 / Shift_JIS / ...), or the IO transcodes
+    # (the wanted output encoding differs from the on-wire bytes) — transcode each chunk to a
+    # UTF-8 view, frame documents there one at a time, and emit each in `out_enc`. Bounded
+    # memory: only one document is buffered, never the whole stream.
+    if source && out_enc && (unscannable_enc?(source) || out_enc != source)
+      return stream_transcoded(io, source, out_enc, options, &block)
+    end
+
     count = 0
     Framer.each_document(io) do |doc|
+      # readpartial dropped the IO's encoding tag; restore it so a Latin-1 / Windows-1252 /
+      # etc. stream is parsed and emitted in its own encoding, not mislabelled.
+      doc = doc.dup.force_encoding(out_enc) if out_enc && doc.encoding != out_enc
       # Recovery.process_string yields each value and returns how many it yielded;
       # blank / comment-only framed segments yield none, so count tracks actual
       # documents (== values yielded), not raw framed segments.
       count += Recovery.process_string(doc, options, &block)
+    end
+    count
+  end
+
+  # Bounded-memory streaming for an unscannable or transcoding IO (see stream_io). Each chunk
+  # is transcoded to a UTF-8 view and framed there one document at a time; each framed document
+  # is parsed and emitted in `out_enc` — the same parse-then-re-tag path as the whole-buffer
+  # case, but per document, so peak memory is bounded by one document, not the whole stream.
+  def stream_transcoded(io, source, out_enc, options, &block)
+    first   = Framer.read_chunk(io)
+    out_enc = concrete_unicode_encoding(first.to_s, out_enc) # generic UTF-16/32 -> concrete via BOM
+    # No converter when the raw bytes are already UTF-8 (e.g. a UTF-8 -> UTF-16 transcoding IO):
+    # the bytes need no transcoding to be byte-scanned, only the OUTPUT is re-tagged (deep_encode).
+    conv    = [Encoding::UTF_8, Encoding::US_ASCII].include?(source) ? nil : Encoding::Converter.new(source, Encoding::UTF_8)
+    opts    = options.merge(encoding: nil)
+    replace = options[:replace_char]
+    count   = 0
+    Framer.each_document_transcoded(io, conv, first) do |utf8_doc|
+      count += Recovery.process_string(utf8_doc, opts) { |v| block.call(deep_encode(v, out_enc, replace)) }
     end
     count
   end
@@ -192,7 +341,10 @@ module SmarterJSON
     end
   end
 
-  private_class_method :process_content, :stream_io, :warn_extra_documents
+  private_class_method :process_content, :stream_io, :stream_transcoded, :warn_extra_documents,
+                       :file_read_mode, :normalize_default_encoding, :unscannable_enc?,
+                       :unscannable_encoding, :concrete_unicode_encoding, :to_utf8_copy,
+                       :reencode_scalar, :deep_encode
 
   # Named byte values, shared by the Parser FSM and the Framer / Recovery byte
   # scanners so none of them spell out raw hex. Included where needed.
@@ -259,6 +411,59 @@ module SmarterJSON
       end
 
       yield buffer unless separators_only?(buffer)
+    end
+
+    # Like each_document, but the IO's raw bytes are in `conv`'s source encoding (UTF-16 /
+    # UTF-32 / Shift_JIS / ...): each chunk is transcoded to a UTF-8 view and framed there, so
+    # the byte-level splitter works. `first_chunk` is the already-read first raw chunk (the
+    # caller sniffs a BOM from it). Memory stays bounded by one document, like each_document.
+    def each_document_transcoded(io, conv, first_chunk)
+      buffer = +""
+      scan = 0
+      doc_start = nil
+      stack = []
+      mode = nil
+
+      raw = first_chunk
+      while raw
+        chunk = transcode_chunk(conv, raw)
+        unless chunk.empty?
+          buffer << chunk
+          loop do
+            emitted, buffer, scan, doc_start, stack, mode = scan_buffer(buffer, scan, doc_start, stack, mode)
+            break unless emitted
+
+            yield emitted
+          end
+        end
+        raw = read_chunk(io)
+      end
+
+      finish_transcode(conv) # truncated / invalid trailing bytes -> SmarterJSON::EncodingError
+
+      yield buffer unless separators_only?(buffer)
+    end
+
+    # Push one raw chunk through the converter, returning the UTF-8 produced so far. An
+    # incomplete trailing multibyte sequence is held inside the converter until the next chunk;
+    # invalid bytes raise SmarterJSON::EncodingError (matching the whole-buffer to_utf8_copy).
+    def transcode_chunk(conv, raw)
+      return raw.dup.force_encoding(Encoding::UTF_8) if conv.nil? # raw bytes are already UTF-8
+
+      out = +""
+      status = conv.primitive_convert(raw.dup, out, nil, nil, partial_input: true)
+      raise SmarterJSON::EncodingError, "invalid byte sequence in stream" if status == :invalid_byte_sequence
+
+      out
+    end
+
+    # Flush the converter at end of stream. A held incomplete multibyte sequence means the input
+    # was truncated mid-character — surface it the same way an invalid encoding is surfaced.
+    def finish_transcode(conv)
+      return if conv.nil?
+
+      status = conv.primitive_convert("".b, +"")
+      raise SmarterJSON::EncodingError, "invalid byte sequence in stream" unless status == :finished
     end
 
     def read_chunk(io)
@@ -466,6 +671,22 @@ module SmarterJSON
 
     def process_string(input, options, &block)
       input = SmarterJSON.send(:normalize_default_encoding, input, options)
+
+      # UTF-16 / UTF-32 / Shift_JIS / ... cannot be byte-scanned for JSON structure. Parse
+      # a UTF-8 copy and emit each document's strings back in the encoding the bytes arrived
+      # in — the caller always gets values in the encoding they handed us, never UTF-8.
+      if (target_enc = SmarterJSON.send(:unscannable_encoding, input))
+        target_enc = SmarterJSON.send(:concrete_unicode_encoding, input, target_enc) # avoid per-string BOMs
+        opts = options.merge(encoding: nil) # the working copy is UTF-8; don't re-label it downstream
+        utf8 = SmarterJSON.send(:to_utf8_copy, input) # invalid bytes -> SmarterJSON::EncodingError
+        replace = options[:replace_char]
+        if block
+          return process_string(utf8, opts) { |doc| block.call(SmarterJSON.send(:deep_encode, doc, target_enc, replace)) }
+        end
+
+        return process_string(utf8, opts).map { |doc| SmarterJSON.send(:deep_encode, doc, target_enc, replace) }
+      end
+
       return SmarterJSON.send(:process_content, input, options, &block) unless input.valid_encoding?
 
       # Recovery is REACTIVE: parse first, and only fall back to wrapper extraction when

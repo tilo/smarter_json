@@ -222,6 +222,7 @@ In short: **SmarterJSON's C path matches or beats Oj/strict on every file** (app
 | `decimal_precision` | `:auto`      | `:auto` keeps high-precision decimals as `BigDecimal`; `:float` forces `Float`; `:bigdecimal` forces `BigDecimal` |
 | `acceleration`    | `true`       | `true` uses the C extension when compiled and loadable; `false` forces pure Ruby (identical results) |
 | `encoding`        | `nil`        | labels the input's encoding; `nil` keeps the input's own (no transcoding pass; see below) |
+| `replace_char`    | `"?"`        | replacement for a char a `\uXXXX` escape decodes to that the input's encoding can't represent (e.g. an emoji inside Shift_JIS); `""` drops it |
 | `on_warning`      | `nil`        | a callable invoked once per lenient fix applied (`:empty_slot`, `:empty_value`, `:duplicate_key`, `:number_overflow`), passed a `SmarterJSON::Warning`; the return value is never changed. See below. |
 
 ## Examples
@@ -357,6 +358,8 @@ TEXT
 ## Encoding
 
 `encoding:` (default `nil`) labels what the input is — it does **not** transcode. With `nil`, SmarterJSON keeps the input's own encoding tag and emits string values with that same tag, the way `smarter_csv` does — **with one smart default:** input tagged `ASCII-8BIT` (BINARY) whose bytes are valid UTF-8 is treated as UTF-8. That is exactly how `Net::HTTP` and many HTTP libraries hand you a `response.body` (correct UTF-8 bytes, BINARY tag); without this, string values would come back tagged `ASCII-8BIT` and compare unequal to UTF-8 literals. If such `ASCII-8BIT` input is *not* valid UTF-8, it raises `SmarterJSON::EncodingError` rather than guess a legacy encoding — pass an explicit `encoding:` (e.g. `"ISO-8859-1"`) for that. Bytes invalid for an explicitly claimed encoding also raise `SmarterJSON::EncodingError` (a kind of `SmarterJSON::ParseError`).
+
+UTF-16 / UTF-32, Shift_JIS, and other CJK double-byte encodings parse too: SmarterJSON works on a UTF-8 copy internally and re-tags the result back into the input's own encoding, so values come back in the encoding the bytes arrived in (a UTF-16 / UTF-32 BOM is consumed on the way in). The one edge case — a `\uXXXX` escape that decodes to a character that encoding can't represent (e.g. an emoji inside a Shift_JIS document) — is replaced by `replace_char` (default `"?"`, or `""` to drop it) rather than raising.
 
 ## Nesting & untrusted input
 
