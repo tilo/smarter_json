@@ -37,6 +37,28 @@ It raises only on genuinely unreadable input (unterminated string, mismatched br
 
 Both the C extension and the pure-Ruby engine are **iterative, not recursive** — they track nesting on an explicit, heap-allocated stack rather than the call stack. So deeply nested input **cannot overflow the call stack or segfault**: nesting is bounded only by available memory, the same posture as Oj (the stdlib `json` caps at 100). The trade-off: there is currently **no fixed nesting or input-size limit**, so size-limit untrusted input upstream.
 
+## Build-Time Performance Tuning (`SMARTER_JSON_PERFORMANCE`)
+
+The C extension is compiled when the gem is installed. By default it is built **portable**: it uses no CPU-specific instructions, so a binary compiled on one machine runs on any other CPU of the same architecture. This matters whenever the machine that builds the gem differs from the machine that runs it — a CI or build server, a Docker image moved between hosts, or a mixed-hardware fleet. A build that bakes in instructions the run host lacks (such as AVX-512) would otherwise crash with `Illegal instruction`.
+
+Set `SMARTER_JSON_PERFORMANCE` at install time to trade portability for speed:
+
+| Level                | Flags added                               | Portable?                        | Use when                              |
+|----------------------|-------------------------------------------|----------------------------------|---------------------------------------|
+| `portable` (default) | none                                      | Yes, any CPU of the arch         | Build host may differ from run host   |
+| `tuned`              | `-mtune=native`                           | Yes, instruction scheduling only | Build and run hosts share a microarch |
+| `max`                | `-march=native`, or `-mcpu=native` on ARM | No, host instruction optimization| Build host and run host are the same  |
+
+`tuned` only changes instruction scheduling, never the instruction set, so it stays portable — and it pays off when the build and run hosts share a microarchitecture (the same chip, or a fleet of identical instances). `max` enables host-specific instructions and is the fastest, but a binary built with it can crash on a different CPU. Every flag is probed against your compiler at build time and skipped if unsupported, so an unavailable flag never breaks the build.
+
+```bash
+SMARTER_JSON_PERFORMANCE=tuned gem install smarter_json   # portable, tuned for this machine's microarchitecture
+SMARTER_JSON_PERFORMANCE=max   gem install smarter_json   # fastest, NOT portable — only when you build on the machine you run on
+SMARTER_JSON_PERFORMANCE=tuned bundle install             # same, under Bundler
+```
+
+For a fixed baseline instead of `native` (e.g. a portable-but-newer instruction set), pass flags directly via `CFLAGS`, which the build also honors: `CFLAGS="-march=x86-64-v2" gem install smarter_json`.
+
 ---------------
 
 NEXT: [The Basic Read API](./basic_read_api.md) | UP: [README](../README.md)

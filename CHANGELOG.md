@@ -13,6 +13,18 @@
 > ⚠️ We discourage the use of `process(input).first` / `process(input)[0]` because it silently drops potential additional documents
 >    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads, because it emits on_warning if it finds multiple docs.
 
+## 1.2.4 (2026-07-01)
+
+RSpec tests: 1,268 → 1,282
+
+### Bug Fixes
+
+  - **Portable builds by default — fixes the "Illegal instruction" crash on mixed-hardware fleets.** The C extension was compiled with `-march=native` on every platform except Apple Silicon, baking in the build host's CPU instructions (e.g. AVX-512). A binary built on one machine could then crash with `Illegal instruction` when run on a CPU lacking those instructions — common when the build host differs from the run host (CI/build servers, Docker images, mixed-hardware fleets). The C extension is now built **portable** by default (no host-specific instructions).
+
+### New Features
+
+  - **`SMARTER_JSON_PERFORMANCE` build option** (`portable` default, `tuned`, or `max`) to opt into host-tuned or host-specific instructions at install time. See the [README](README.md#cpu-optimization-smarter_json_performance) / [Introduction](docs/_introduction.md#build-time-performance-tuning-smarter_json_performance) for details.
+
 ## 1.2.3 (2026-06-28)
 
 RSpec tests: 1,167 → 1,268

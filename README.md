@@ -114,6 +114,26 @@ gem install smarter_json
 
 The C extension is built on install and used automatically. On platforms where it can't build, the pure-Ruby implementation runs instead and produces identical results.
 
+### CPU Optimization (`SMARTER_JSON_PERFORMANCE`)
+
+The C extension is compiled when the gem is installed. By default it is built **portable**: it uses no CPU-specific instructions, so a binary built on one machine runs on any other CPU of the same architecture. Set `SMARTER_JSON_PERFORMANCE` at install time to trade portability for speed:
+
+| Level                | Flags added                               | Portable?                        | Use when                              |
+|----------------------|-------------------------------------------|----------------------------------|---------------------------------------|
+| `portable` (default) | none                                      | Yes, any CPU of the arch         | Build host may differ from run host   |
+| `tuned`              | `-mtune=native`                           | Yes, instruction scheduling only | Build and run hosts share a microarch |
+| `max`                | `-march=native`, or `-mcpu=native` on ARM | No, host instruction optimization| Build host and run host are the same  |
+
+`max` enables host-specific instructions, so a binary built with it can crash with `Illegal instruction` if it later runs on a CPU that lacks them (for example, built on an AVX-512 machine and run on one without). `tuned` only changes instruction scheduling, never the instruction set, so it stays portable. Every flag is probed against your compiler at build time and skipped if unsupported, so an unavailable flag never breaks the build.
+
+```bash
+SMARTER_JSON_PERFORMANCE=tuned gem install smarter_json   # portable, tuned for this machine's microarchitecture
+SMARTER_JSON_PERFORMANCE=max   gem install smarter_json   # fastest, NOT portable — only when you build on the machine you run on
+SMARTER_JSON_PERFORMANCE=tuned bundle install             # same, under Bundler
+```
+
+For a fixed baseline instead of `native` (e.g. a portable-but-newer instruction set), pass flags directly via `CFLAGS`, which the build also honors: `CFLAGS="-march=x86-64-v2" gem install smarter_json`.
+
 ## Usage
 
 Pass a String of JSON content or an IO; you get back the extracted data. The same call handles strict JSON, JSON5, and HJSON-style config — there are no modes or flags.
