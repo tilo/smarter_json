@@ -384,6 +384,7 @@ module SmarterJSON
     TAB        = 0x09
     LF         = 0x0A
     CR         = 0x0D
+    RS         = 0x1E # RFC 7464 record separator — frames each JSON Text Sequence record
   end
 
   module Framer
@@ -1052,13 +1053,14 @@ module SmarterJSON
       parse_iter(implicit_root_object_ahead?)
     end
 
-    # Between top-level documents, whitespace, comments, AND commas all separate
-    # (commas collapse like the in-container lenient-comma rule). A space alone never
-    # separates — that is handled inside the document by the quoteless run, so
+    # Between top-level documents, whitespace, comments, commas, AND the RFC 7464
+    # record separator (0x1E) all separate (commas collapse like the in-container
+    # lenient-comma rule; 0x1E frames each JSON Text Sequence record). A space alone
+    # never separates — that is handled inside the document by the quoteless run, so
     # `1 2 3` is one document (the string "1 2 3") while `1, 2, 3` is three.
     def skip_document_separators
       skip_whitespace_and_comments
-      while byte == COMMA
+      while (b = byte) == COMMA || b == RS
         advance(1)
         skip_whitespace_and_comments
       end
@@ -1066,15 +1068,16 @@ module SmarterJSON
 
     # After a top-level value: a self-delimiting value (object / array / quoted string)
     # may be followed by anything (the next document self-delimits), but a bare scalar
-    # (number / keyword) must be followed by a real separator — a newline, ',', a
-    # comment, or EOF. A space is NOT a separator, so `1 2 3` and `42 "x" true` raise
-    # rather than silently splitting; bare top-level words raise in parse_value itself.
+    # (number / keyword) must be followed by a real separator — a newline, ',', the RFC
+    # 7464 record separator (0x1E), a comment, or EOF. A space is NOT a separator, so
+    # `1 2 3` and `42 "x" true` raise rather than silently splitting; bare top-level
+    # words raise in parse_value itself.
     def enforce_scalar_boundary(value)
       return if value.is_a?(String) || value.is_a?(Hash) || value.is_a?(Array)
 
       skip_horizontal_whitespace
       b = byte
-      return if b.nil? || b == LF || b == CR || b == COMMA
+      return if b.nil? || b == LF || b == CR || b == COMMA || b == RS
       return if b == HASH || (b == SLASH && ((c = byte_at(1)) == SLASH || c == STAR))
 
       raise error("a top-level number or keyword must be followed by a newline, ',', or end of input")

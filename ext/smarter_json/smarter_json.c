@@ -1624,14 +1624,17 @@ static int fj_implicit_root_ahead(fj_state *st) {
   return result;
 }
 
-/* Between top-level documents, whitespace, comments, AND commas all separate
- * (commas collapse like the in-container lenient-comma rule). A space alone never
- * separates — that is handled inside the document by the quoteless run. Mirrors
- * the Ruby Parser#skip_document_separators. */
+/* Between top-level documents, whitespace, comments, commas, AND the RFC 7464
+ * record separator (0x1E) all separate (commas collapse like the in-container
+ * lenient-comma rule; 0x1E frames each JSON Text Sequence record). A space alone
+ * never separates — that is handled inside the document by the quoteless run.
+ * Mirrors the Ruby Parser#skip_document_separators. */
 static void fj_skip_document_separators(fj_state *st) {
   for (;;) {
+    int b;
     fj_skip_ws_comments(st);
-    if (fj_byte(st) != ',') break;
+    b = fj_byte(st);
+    if (b != ',' && b != 0x1E) break;
     fj_advance(st, 1);
   }
 }
@@ -1640,8 +1643,9 @@ static int fj_is_hws(int b) { return b == ' ' || b == '\t' || b == 0x0B || b == 
 
 /* After a top-level value: a self-delimiting value (object / array / string) may be
  * followed by anything, but a bare scalar (number / keyword) must be followed by a
- * real separator — a newline, ',', a comment, or EOF. A space is NOT a separator, so
- * `1 2 3` and `42 "x" true` raise. Mirrors the Ruby Parser#enforce_scalar_boundary. */
+ * real separator — a newline, ',', the RFC 7464 record separator (0x1E), a comment,
+ * or EOF. A space is NOT a separator, so `1 2 3` and `42 "x" true` raise. Mirrors the
+ * Ruby Parser#enforce_scalar_boundary. */
 static void fj_enforce_scalar_boundary(fj_state *st, VALUE value) {
   int b, nx;
   if (RB_TYPE_P(value, T_STRING) || RB_TYPE_P(value, T_HASH) || RB_TYPE_P(value, T_ARRAY)) return;
@@ -1655,7 +1659,7 @@ static void fj_enforce_scalar_boundary(fj_state *st, VALUE value) {
     break;
   }
   b = fj_byte(st);
-  if (b == -1 || b == 0x0A || b == 0x0D || b == ',') return;
+  if (b == -1 || b == 0x0A || b == 0x0D || b == ',' || b == 0x1E) return;
   if (b == '#') return;
   if (b == '/') { nx = fj_byte_at(st, 1); if (nx == '/' || nx == '*') return; }
   fj_error(st, "a top-level number or keyword must be followed by a newline, ',', or end of input");
