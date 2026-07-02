@@ -13,6 +13,14 @@
 > ⚠️ We discourage the use of `process(input).first` / `process(input)[0]` because it silently drops potential additional documents
 >    Please use `process_one` if you are expecting only one JSON doc, e.g. in API payloads, because it emits on_warning if it finds multiple docs.
 
+## 1.2.5 (2026-07-01)
+
+RSpec tests: 1,282 → 1,308
+
+### New Features
+
+  - **RFC 7464 JSON Text Sequences are now read natively.** The record separator (`0x1E`) that frames each record is a first-class document separator, so an RS-framed stream parses into its documents without a warning, and bare-scalar records (a number / keyword / string on its own) are read correctly.
+
 ## 1.2.4 (2026-07-01)
 
 RSpec tests: 1,268 → 1,282
